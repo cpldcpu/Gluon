@@ -1,0 +1,2722 @@
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 1
+
+
+   1               		.file	"main.c"
+   2               	__SP_H__ = 0x3e
+   3               	__SP_L__ = 0x3d
+   4               	__SREG__ = 0x3f
+   5               	__tmp_reg__ = 0
+   6               	__zero_reg__ = 1
+   7               		.text
+   8               	.Ltext0:
+   9               		.cfi_sections	.debug_frame
+  10               		.section	.text.SendByte,"ax",@progbits
+  11               		.type	SendByte, @function
+  12               	SendByte:
+  13               	.LFB15:
+  14               		.file 1 "main.c"
+   1:main.c        **** /* 
+   2:main.c        ****  * Project: Gluon-Bootload -  v2.3
+   3:main.c        ****  *
+   4:main.c        ****  * License: GNU GPL v2 (see License.txt)
+   5:main.c        ****  */
+   6:main.c        ****  
+   7:main.c        **** #define MICRONUCLEUS_VERSION_MAJOR 2
+   8:main.c        **** #define MICRONUCLEUS_VERSION_MINOR 3
+   9:main.c        **** 
+  10:main.c        **** 
+  11:main.c        **** #define RX PA3
+  12:main.c        **** #define TX PA4
+  13:main.c        **** #define BAUD 57600
+  14:main.c        **** 
+  15:main.c        **** 
+  16:main.c        **** #include <avr/io.h>
+  17:main.c        **** #include <avr/pgmspace.h>
+  18:main.c        **** #include <avr/wdt.h>
+  19:main.c        **** #include <util/delay.h>
+  20:main.c        **** 
+  21:main.c        **** #ifndef __AVR_ATtiny104__
+  22:main.c        **** #include <avr/boot.h>
+  23:main.c        **** #endif
+  24:main.c        **** 
+  25:main.c        **** #include "bootloaderconfig.h"
+  26:main.c        **** //#include "bootloadasm.h"
+  27:main.c        **** // #include "usbdrv/usbdrv.c"
+  28:main.c        **** 
+  29:main.c        **** // verify the bootloader address aligns with page size
+  30:main.c        **** #if (defined __AVR_ATtiny841__)||(defined __AVR_ATtiny441__)  
+  31:main.c        ****   #if BOOTLOADER_ADDRESS % ( SPM_PAGESIZE * 4 ) != 0
+  32:main.c        ****     #error "BOOTLOADER_ADDRESS in makefile must be a multiple of chip's pagesize"
+  33:main.c        ****   #endif
+  34:main.c        **** #else
+  35:main.c        ****   #if BOOTLOADER_ADDRESS % SPM_PAGESIZE != 0
+  36:main.c        ****     #error "BOOTLOADER_ADDRESS in makefile must be a multiple of chip's pagesize"
+  37:main.c        ****   #endif  
+  38:main.c        **** #endif
+  39:main.c        **** 
+  40:main.c        **** #if SPM_PAGESIZE>256
+  41:main.c        ****   #error "Micronucleus only supports pagesizes up to 256 bytes"
+  42:main.c        **** #endif
+  43:main.c        **** 
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 2
+
+
+  44:main.c        **** #if ((AUTO_EXIT_MS>0) && (AUTO_EXIT_MS<1000))
+  45:main.c        ****   #error "Do not set AUTO_EXIT_MS to below 1s to allow Micronucleus to function properly"
+  46:main.c        **** #endif
+  47:main.c        **** 
+  48:main.c        **** // Device configuration reply
+  49:main.c        **** // Length: 6 bytes
+  50:main.c        **** //   Byte 0:  Bootloader version. High and low nibble.
+  51:main.c        **** //   Byte 1:  User program memory size, low byte   
+  52:main.c        **** //   Byte 2:  Flash Pagesize in bytes
+  53:main.c        **** 
+  54:main.c        ****   typedef union {
+  55:main.c        ****     uint16_t w;
+  56:main.c        ****     uint8_t b[2];
+  57:main.c        ****   } uint16_union_t;
+  58:main.c        **** 
+  59:main.c        **** #ifdef __AVR_ATtiny104__
+  60:main.c        **** uint16_union_t currentAddress; 
+  61:main.c        **** #else
+  62:main.c        **** register uint16_union_t currentAddress  asm("r4");  // r4/r5 current progmem address, used for eras
+  63:main.c        **** #endif
+  64:main.c        **** 
+  65:main.c        **** static    uint8_t  *buffer=(uint8_t*)RAMSTART;
+  66:main.c        **** static    uint16_t *bufword=(uint16_t*)RAMSTART;
+  67:main.c        **** 
+  68:main.c        **** // command system schedules functions to run in the main loop
+  69:main.c        **** enum {
+  70:main.c        ****   cmd_local_nop=0, 
+  71:main.c        ****   cmd_device_info=0,
+  72:main.c        ****   cmd_transfer_page=1,
+  73:main.c        ****   cmd_erase_application=2,
+  74:main.c        ****   cmd_write_data=3,
+  75:main.c        ****   cmd_exit=4,
+  76:main.c        ****   cmd_write_page=64  // internal commands start at 64
+  77:main.c        **** };
+  78:main.c        **** 
+  79:main.c        **** // Definition of sei and cli without memory barrier keyword to prevent reloading of memory variable
+  80:main.c        **** #define sei() asm volatile("sei")
+  81:main.c        **** #define cli() asm volatile("cli")
+  82:main.c        **** #define nop() asm volatile("nop")
+  83:main.c        **** #define wdr() asm volatile("wdr")
+  84:main.c        **** #define spm(adr)     __asm__ __volatile__      \
+  85:main.c        ****                      (   "spm\n\t"             \
+  86:main.c        ****                       :                        \
+  87:main.c        ****                       : "z" ((uint16_t)adr)); 
+  88:main.c        **** 
+  89:main.c        **** /* ------------------------------------------------------------------------ */
+  90:main.c        **** static inline void eraseApplication(void);
+  91:main.c        **** static void writeFlashPage(void);
+  92:main.c        **** static void writeWordToPageBuffer(uint16_t data);
+  93:main.c        **** static uint8_t usbFunctionSetup(uint8_t data[8]);
+  94:main.c        **** static inline void leaveBootloader(void);
+  95:main.c        **** 
+  96:main.c        **** 
+  97:main.c        **** #ifdef __AVR_ATtiny104__
+  98:main.c        **** 
+  99:main.c        **** static inline void eraseApplication(void) 
+ 100:main.c        **** {
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 3
+
+
+ 101:main.c        **** 
+ 102:main.c        **** }
+ 103:main.c        **** 
+ 104:main.c        **** static void writeWordToPageBuffer(uint16_t data) 
+ 105:main.c        **** {
+ 106:main.c        **** }
+ 107:main.c        **** 
+ 108:main.c        **** 
+ 109:main.c        **** #else
+ 110:main.c        **** 
+ 111:main.c        **** // erase all pages until bootloader, in reverse order (so our vectors stay in place for as long as 
+ 112:main.c        **** // to minimise the chance of leaving the device in a state where the bootloader wont run, if there'
+ 113:main.c        **** // during upload
+ 114:main.c        **** static inline void eraseApplication(void) {
+ 115:main.c        ****   uint16_t ptr = BOOTLOADER_ADDRESS;
+ 116:main.c        **** 
+ 117:main.c        ****   while (ptr) {
+ 118:main.c        **** #if (defined __AVR_ATtiny841__)||(defined __AVR_ATtiny441__)    
+ 119:main.c        ****     ptr -= SPM_PAGESIZE * 4;        
+ 120:main.c        **** #else
+ 121:main.c        ****     ptr -= SPM_PAGESIZE;        
+ 122:main.c        **** #endif    
+ 123:main.c        **** 
+ 124:main.c        ****     __SPM_REG=(__BOOT_PAGE_ERASE|_BV(__SPM_ENABLE)|_BV(CTPB));
+ 125:main.c        ****     spm(ptr);
+ 126:main.c        ****   }
+ 127:main.c        ****  
+ 128:main.c        ****   // Reset address to ensure the reset vector is written first.
+ 129:main.c        ****   currentAddress.w = 0;   
+ 130:main.c        **** }
+ 131:main.c        **** 
+ 132:main.c        **** // Write a word into the page buffer.
+ 133:main.c        **** // Will patch the bootloader reset vector into the main vectortable to ensure
+ 134:main.c        **** // the device can not be bricked. 
+ 135:main.c        **** static void writeWordToPageBuffer(uint16_t data) {
+ 136:main.c        **** 
+ 137:main.c        **** #ifndef ENABLE_UNSAFE_OPTIMIZATIONS     
+ 138:main.c        ****   #if BOOTLOADER_ADDRESS < 8192
+ 139:main.c        ****   // rjmp
+ 140:main.c        ****   if (currentAddress.w == RESET_VECTOR_OFFSET * 2) {
+ 141:main.c        ****     data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
+ 142:main.c        ****   }
+ 143:main.c        ****   #else
+ 144:main.c        ****   // far jmp
+ 145:main.c        ****   if (currentAddress.w == RESET_VECTOR_OFFSET * 2) {
+ 146:main.c        ****     data = 0x940c;
+ 147:main.c        ****   } else if (currentAddress.w == (RESET_VECTOR_OFFSET +1 ) * 2) {
+ 148:main.c        ****     data = (BOOTLOADER_ADDRESS/2);
+ 149:main.c        ****   }    
+ 150:main.c        ****   #endif
+ 151:main.c        **** #endif
+ 152:main.c        **** 
+ 153:main.c        ****   boot_page_fill(currentAddress.w, data);
+ 154:main.c        ****   currentAddress.w += 2;
+ 155:main.c        **** 
+ 156:main.c        ****   if ((currentAddress.b[0] % SPM_PAGESIZE) == 0)  {
+ 157:main.c        ****        __SPM_REG=(__BOOT_PAGE_WRITE|_BV(__SPM_ENABLE));
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 4
+
+
+ 158:main.c        ****       spm((uint16_t)currentAddress.w - 2);
+ 159:main.c        ****   }
+ 160:main.c        **** }
+ 161:main.c        **** 
+ 162:main.c        **** #define RX PB3
+ 163:main.c        **** #define TX PB4
+ 164:main.c        **** #define BAUD 57600
+ 165:main.c        **** 
+ 166:main.c        **** #endif
+ 167:main.c        **** 
+ 168:main.c        **** 
+ 169:main.c        **** void DelayBaud(void)
+ 170:main.c        **** {
+ 171:main.c        ****   _delay_us(1000000/BAUD);  
+ 172:main.c        **** }
+ 173:main.c        **** 
+ 174:main.c        **** static void DelayBaudHalf(void)
+ 175:main.c        **** {
+ 176:main.c        ****   _delay_us(500000/BAUD);
+ 177:main.c        **** }
+ 178:main.c        **** 
+ 179:main.c        **** 
+ 180:main.c        **** static uint8_t GetByte(void)
+ 181:main.c        **** {
+ 182:main.c        **** 
+ 183:main.c        ****   DDRB  &= ~_BV(RX);
+ 184:main.c        **** 
+ 185:main.c        ****   while (!(PINB&_BV(RX))); // Wait for hi
+ 186:main.c        ****   while ( (PINB&_BV(RX))); // Wait for start bit
+ 187:main.c        ****   
+ 188:main.c        ****   DelayBaudHalf();
+ 189:main.c        ****   
+ 190:main.c        ****   uint8_t data=0;
+ 191:main.c        ****   uint8_t i;
+ 192:main.c        **** 
+ 193:main.c        ****   for (i=0; i<8; i++)
+ 194:main.c        ****   {
+ 195:main.c        ****     DelayBaud();
+ 196:main.c        ****     
+ 197:main.c        ****     data>>=1;
+ 198:main.c        ****     if (PINB&_BV(RX)) data|=0x80;       
+ 199:main.c        ****   } 
+ 200:main.c        ****   
+ 201:main.c        ****   return data;    
+ 202:main.c        **** }
+ 203:main.c        **** 
+ 204:main.c        **** 
+ 205:main.c        **** static uint8_t GetBlock(void) 
+ 206:main.c        **** {
+ 207:main.c        ****   uint8_t sum=0,b,i=0;
+ 208:main.c        ****     do
+ 209:main.c        ****     {
+ 210:main.c        ****       // Detect next falling edge
+ 211:main.c        ****       uint8_t last=0;
+ 212:main.c        ****       uint32_t ctr=800000;
+ 213:main.c        **** 
+ 214:main.c        ****       while (1) {
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 5
+
+
+ 215:main.c        ****         if (PINB&_BV(RX)) {
+ 216:main.c        ****           last=1;
+ 217:main.c        ****         } else {
+ 218:main.c        ****           if (last) 
+ 219:main.c        ****             break;        
+ 220:main.c        ****         }         
+ 221:main.c        **** 
+ 222:main.c        ****         if (!ctr--) {
+ 223:main.c        ****             asm volatile ("rjmp __vectors - 2"); 
+ 224:main.c        ****         }
+ 225:main.c        ****       }
+ 226:main.c        **** 
+ 227:main.c        ****       // b=GetByte();
+ 228:main.c        ****       // while (!(PINB&_BV(RX))); // Wait for hi
+ 229:main.c        ****       // while ( (PINB&_BV(RX))); // Wait for start bit
+ 230:main.c        **** 
+ 231:main.c        ****       DelayBaudHalf();
+ 232:main.c        **** 
+ 233:main.c        ****       uint8_t data=0;
+ 234:main.c        ****       uint8_t j;
+ 235:main.c        **** 
+ 236:main.c        ****       for (j=0; j<8; j++)
+ 237:main.c        ****       {
+ 238:main.c        ****         DelayBaud();
+ 239:main.c        ****         
+ 240:main.c        ****         data>>=1;
+ 241:main.c        ****         if (PINB&_BV(RX)) data|=0x80;       
+ 242:main.c        ****       }       
+ 243:main.c        ****       buffer[i]=data;      
+ 244:main.c        ****       sum+=data;     
+ 245:main.c        ****     } while (++i<18);         
+ 246:main.c        **** 
+ 247:main.c        ****   return sum;  
+ 248:main.c        **** }
+ 249:main.c        **** 
+ 250:main.c        **** static void SendByte(uint8_t data)
+ 251:main.c        **** {
+  15               		.loc 1 251 0
+  16               		.cfi_startproc
+  17               	.LVL0:
+  18               	/* prologue: function */
+  19               	/* frame size = 0 */
+  20               	/* stack size = 0 */
+  21               	.L__stack_usage = 0
+ 252:main.c        ****   uint8_t i;
+ 253:main.c        ****   
+ 254:main.c        ****    PORTB &=~_BV(TX);
+  22               		.loc 1 254 0
+  23 0000 C498      		cbi 0x18,4
+  24               	.LVL1:
+  25               	.LBB18:
+  26               	.LBB19:
+  27               	.LBB20:
+  28               		.file 2 "c:\\program files (x86)\\atmel\\avr tools\\avr toolchain\\avr\\include\\util\\delay.h"
+   1:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** /* Copyright (c) 2002, Marek Michalkiewicz
+   2:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Copyright (c) 2004,2005,2007 Joerg Wunsch
+   3:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Copyright (c) 2007  Florin-Viorel Petrov
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 6
+
+
+   4:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    All rights reserved.
+   5:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+   6:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Redistribution and use in source and binary forms, with or without
+   7:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    modification, are permitted provided that the following conditions are met:
+   8:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+   9:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    * Redistributions of source code must retain the above copyright
+  10:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****      notice, this list of conditions and the following disclaimer.
+  11:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  12:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    * Redistributions in binary form must reproduce the above copyright
+  13:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****      notice, this list of conditions and the following disclaimer in
+  14:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****      the documentation and/or other materials provided with the
+  15:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****      distribution.
+  16:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  17:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    * Neither the name of the copyright holders nor the names of
+  18:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****      contributors may be used to endorse or promote products derived
+  19:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****      from this software without specific prior written permission.
+  20:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  21:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  22:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  23:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  24:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  25:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  26:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  27:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  28:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  29:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  30:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  31:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   POSSIBILITY OF SUCH DAMAGE. */
+  32:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  33:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** /* $Id$ */
+  34:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  35:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #ifndef _UTIL_DELAY_H_
+  36:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #define _UTIL_DELAY_H_ 1
+  37:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  38:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #ifndef __HAS_DELAY_CYCLES
+  39:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #define __HAS_DELAY_CYCLES 1
+  40:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #endif
+  41:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  42:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #include <inttypes.h>
+  43:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #include <util/delay_basic.h>
+  44:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #include <math.h>
+  45:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  46:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** /** \file */
+  47:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** /** \defgroup util_delay <util/delay.h>: Convenience functions for busy-wait delay loops
+  48:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     \code
+  49:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     #define F_CPU 1000000UL  // 1 MHz
+  50:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     //#define F_CPU 14.7456E6
+  51:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     #include <util/delay.h>
+  52:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     \endcode
+  53:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  54:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     \note As an alternative method, it is possible to pass the
+  55:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     F_CPU macro down to the compiler from the Makefile.
+  56:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     Obviously, in that case, no \c \#define statement should be
+  57:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     used.
+  58:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  59:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     The functions in this header file are wrappers around the basic
+  60:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     busy-wait functions from <util/delay_basic.h>.  They are meant as
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 7
+
+
+  61:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     convenience functions where actual time values can be specified
+  62:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     rather than a number of cycles to wait for.  The idea behind is
+  63:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     that compile-time constant expressions will be eliminated by
+  64:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     compiler optimization so floating-point expressions can be used
+  65:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     to calculate the number of delay cycles needed based on the CPU
+  66:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     frequency passed by the macro F_CPU.
+  67:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  68:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     \note In order for these functions to work as intended, compiler
+  69:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     optimizations <em>must</em> be enabled, and the delay time
+  70:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     <em>must</em> be an expression that is a known constant at
+  71:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     compile-time.  If these requirements are not met, the resulting
+  72:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     delay will be much longer (and basically unpredictable), and
+  73:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     applications that otherwise do not use floating-point calculations
+  74:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     will experience severe code bloat by the floating-point library
+  75:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     routines linked into the application.
+  76:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  77:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     The functions available allow the specification of microsecond, and
+  78:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     millisecond delays directly, using the application-supplied macro
+  79:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     F_CPU as the CPU clock frequency (in Hertz).
+  80:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  81:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** */
+  82:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  83:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #if !defined(__DOXYGEN__)
+  84:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** static inline void _delay_us(double __us) __attribute__((always_inline));
+  85:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** static inline void _delay_ms(double __ms) __attribute__((always_inline));
+  86:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #endif
+  87:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  88:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #ifndef F_CPU
+  89:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** /* prevent compiler error by supplying a default */
+  90:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** # warning "F_CPU not defined for <util/delay.h>"
+  91:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** # define F_CPU 1000000UL
+  92:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #endif
+  93:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  94:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #ifndef __OPTIMIZE__
+  95:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** # warning "Compiler optimizations disabled; functions from <util/delay.h> won't work as designed"
+  96:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #endif
+  97:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+  98:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+  99:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 100:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   __STDC_HOSTED__
+ 101:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #  include <math.h>
+ 102:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #endif
+ 103:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 104:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** /**
+ 105:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    \ingroup util_delay
+ 106:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 107:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Perform a delay of \c __ms milliseconds, using _delay_loop_2().
+ 108:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 109:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    The macro F_CPU is supposed to be defined to a
+ 110:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 111:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 112:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    The maximal possible delay is 262.14 ms / F_CPU in MHz.
+ 113:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 114:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    When the user request delay which exceed the maximum possible one,
+ 115:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    _delay_ms() provides a decreased resolution functionality. In this
+ 116:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    mode _delay_ms() will work with a resolution of 1/10 ms, providing
+ 117:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    delays up to 6.5535 seconds (independent from CPU frequency).  The
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 8
+
+
+ 118:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    user will not be informed about decreased resolution.
+ 119:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 120:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    If the avr-gcc toolchain has __builtin_avr_delay_cycles(unsigned long)
+ 121:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    support, maximal possible delay is 4294967.295 ms/ F_CPU in MHz. For
+ 122:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    values greater than the maximal possible delay, overflows results in
+ 123:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    no delay i.e., 0ms.
+ 124:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 125:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Conversion of __us into clock cycles may not always result in integer.
+ 126:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    By default, the clock cycles rounded up to next integer. This ensures that
+ 127:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    the user gets atleast __us microseconds of delay.
+ 128:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 129:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Alternatively, user can define __DELAY_ROUND_DOWN__ and __DELAY_ROUND_CLOSEST__
+ 130:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    to round down and round to closest integer.
+ 131:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 132:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Note: The new implementation of _delay_ms(double __ms) with 
+ 133:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     __builtin_avr_delay_cycles(unsigned long) support is not backward compatible. 
+ 134:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    User can define __DELAY_BACKWARD_COMPATIBLE__ to get a backward compatible delay.
+ 135:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Also, the backward compatible
+ 136:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    algorithm will be chosen if the code is compiled in a <em>freestanding
+ 137:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    environment</em> (GCC option \c -ffreestanding), as the math functions
+ 138:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    required for rounding are not available to the compiler then.
+ 139:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 140:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****  */
+ 141:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** void
+ 142:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** _delay_ms(double __ms)
+ 143:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** {
+ 144:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	double __tmp ; 
+ 145:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+ 146:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 147:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   __STDC_HOSTED__
+ 148:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	uint32_t __ticks_dc;
+ 149:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	extern void __builtin_avr_delay_cycles(unsigned long);
+ 150:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	__tmp = ((F_CPU) / 1e3) * __ms;
+ 151:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 152:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#if defined(__DELAY_ROUND_DOWN__)
+ 153:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks_dc = (uint32_t)fabs(__tmp);
+ 154:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 155:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#elif defined(__DELAY_ROUND_CLOSEST__)
+ 156:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks_dc = (uint32_t)(fabs(__tmp)+0.5);
+ 157:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 158:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#else
+ 159:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		//round up by default
+ 160:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks_dc = (uint32_t)(ceil(fabs(__tmp)));
+ 161:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#endif
+ 162:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 163:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	__builtin_avr_delay_cycles(__ticks_dc);
+ 164:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 165:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #else
+ 166:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	uint16_t __ticks;
+ 167:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	__tmp = ((F_CPU) / 4e3) * __ms;
+ 168:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	if (__tmp < 1.0)
+ 169:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks = 1;
+ 170:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	else if (__tmp > 65535)
+ 171:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	{
+ 172:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		//	__ticks = requested delay in 1/10 ms
+ 173:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks = (uint16_t) (__ms * 10.0);
+ 174:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		while(__ticks)
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 9
+
+
+ 175:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		{
+ 176:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 			// wait 1/10 ms
+ 177:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 			_delay_loop_2(((F_CPU) / 4e3) / 10);
+ 178:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 			__ticks --;
+ 179:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		}
+ 180:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		return;
+ 181:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	}
+ 182:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	else
+ 183:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks = (uint16_t)__tmp;
+ 184:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	_delay_loop_2(__ticks);
+ 185:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #endif
+ 186:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** }
+ 187:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 188:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** /**
+ 189:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    \ingroup util_delay
+ 190:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 191:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Perform a delay of \c __us microseconds, using _delay_loop_1().
+ 192:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 193:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    The macro F_CPU is supposed to be defined to a
+ 194:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 195:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 196:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    The maximal possible delay is 768 us / F_CPU in MHz.
+ 197:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 198:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    If the user requests a delay greater than the maximal possible one,
+ 199:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    _delay_us() will automatically call _delay_ms() instead.  The user
+ 200:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    will not be informed about this case.
+ 201:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 202:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    If the avr-gcc toolchain has __builtin_avr_delay_cycles(unsigned long)
+ 203:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    support, maximal possible delay is 4294967.295 us/ F_CPU in MHz. For
+ 204:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    values greater than the maximal possible delay, overflow results in
+ 205:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    no delay i.e., 0us.
+ 206:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   
+ 207:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Conversion of __us into clock cycles may not always result in integer.
+ 208:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    By default, the clock cycles rounded up to next integer. This ensures that
+ 209:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    the user gets atleast __us microseconds of delay.
+ 210:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 211:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Alternatively, user can define __DELAY_ROUND_DOWN__ and __DELAY_ROUND_CLOSEST__
+ 212:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    to round down and round to closest integer.
+ 213:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****  
+ 214:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Note: The new implementation of _delay_us(double __us) with 
+ 215:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****     __builtin_avr_delay_cycles(unsigned long) support is not backward compatible.
+ 216:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    User can define __DELAY_BACKWARD_COMPATIBLE__ to get a backward compatible delay.
+ 217:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    Also, the backward compatible
+ 218:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    algorithm will be chosen if the code is compiled in a <em>freestanding
+ 219:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    environment</em> (GCC option \c -ffreestanding), as the math functions
+ 220:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****    required for rounding are not available to the compiler then.
+ 221:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 222:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****  */
+ 223:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** void
+ 224:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** _delay_us(double __us)
+ 225:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** {
+ 226:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	double __tmp ; 
+ 227:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+ 228:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 229:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h ****   __STDC_HOSTED__
+ 230:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	uint32_t __ticks_dc;
+ 231:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	extern void __builtin_avr_delay_cycles(unsigned long);
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 10
+
+
+ 232:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	__tmp = ((F_CPU) / 1e6) * __us;
+ 233:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 234:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#if defined(__DELAY_ROUND_DOWN__)
+ 235:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks_dc = (uint32_t)fabs(__tmp);
+ 236:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 237:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#elif defined(__DELAY_ROUND_CLOSEST__)
+ 238:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks_dc = (uint32_t)(fabs(__tmp)+0.5);
+ 239:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 240:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#else
+ 241:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		//round up by default
+ 242:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 		__ticks_dc = (uint32_t)(ceil(fabs(__tmp)));
+ 243:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	#endif
+ 244:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 
+ 245:c:\program files (x86)\atmel\avr tools\avr toolchain\avr\include\util\delay.h **** 	__builtin_avr_delay_cycles(__ticks_dc);
+  29               		.loc 2 245 0
+  30 0002 2DE5      		ldi r18,lo8(93)
+  31 0004 2A95      	1:	dec r18
+  32 0006 01F4      		brne 1b
+  33 0008 00C0      		rjmp .
+  34               	.LVL2:
+  35 000a 98E0      		ldi r25,lo8(8)
+  36               	.LVL3:
+  37               	.L4:
+  38               	.LBE20:
+  39               	.LBE19:
+  40               	.LBE18:
+ 255:main.c        ****   DelayBaud();
+ 256:main.c        ****   
+ 257:main.c        ****   for (i=0; i<8; i++)
+ 258:main.c        ****   {
+ 259:main.c        ****     if (data&1)
+  41               		.loc 1 259 0
+  42 000c 80FF      		sbrs r24,0
+  43 000e 00C0      		rjmp .L2
+ 260:main.c        ****       PORTB |= _BV(TX);
+  44               		.loc 1 260 0
+  45 0010 C49A      		sbi 0x18,4
+  46 0012 00C0      		rjmp .L3
+  47               	.L2:
+ 261:main.c        ****     else
+ 262:main.c        ****       PORTB &=~_BV(TX);
+  48               		.loc 1 262 0
+  49 0014 C498      		cbi 0x18,4
+  50               	.L3:
+ 263:main.c        ****     data>>=1;
+  51               		.loc 1 263 0 discriminator 2
+  52 0016 8695      		lsr r24
+  53               	.LVL4:
+  54               	.LBB21:
+  55               	.LBB22:
+  56               	.LBB23:
+  57               		.loc 2 245 0 discriminator 2
+  58 0018 2DE5      		ldi r18,lo8(93)
+  59 001a 2A95      	1:	dec r18
+  60 001c 01F4      		brne 1b
+  61 001e 00C0      		rjmp .
+  62               	.LVL5:
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 11
+
+
+  63 0020 9150      		subi r25,lo8(-(-1))
+  64               	.LVL6:
+  65               	.LBE23:
+  66               	.LBE22:
+  67               	.LBE21:
+ 257:main.c        ****   {
+  68               		.loc 1 257 0 discriminator 2
+  69 0022 01F4      		brne .L4
+ 264:main.c        ****     DelayBaud();
+ 265:main.c        ****   }
+ 266:main.c        **** 
+ 267:main.c        ****     PORTB |= _BV(TX);
+  70               		.loc 1 267 0
+  71 0024 C49A      		sbi 0x18,4
+  72               	.LVL7:
+  73               	.LBB24:
+  74               	.LBB25:
+  75               	.LBB26:
+  76               		.loc 2 245 0
+  77 0026 8DE5      		ldi r24,lo8(93)
+  78 0028 8A95      	1:	dec r24
+  79 002a 01F4      		brne 1b
+  80               	.LVL8:
+  81 002c 00C0      		rjmp .
+  82 002e 0895      		ret
+  83               	.LBE26:
+  84               	.LBE25:
+  85               	.LBE24:
+  86               		.cfi_endproc
+  87               	.LFE15:
+  88               		.size	SendByte, .-SendByte
+  89               		.section	.text.DelayBaud,"ax",@progbits
+  90               	.global	DelayBaud
+  91               		.type	DelayBaud, @function
+  92               	DelayBaud:
+  93               	.LFB11:
+ 170:main.c        ****   _delay_us(1000000/BAUD);  
+  94               		.loc 1 170 0
+  95               		.cfi_startproc
+  96               	/* prologue: function */
+  97               	/* frame size = 0 */
+  98               	/* stack size = 0 */
+  99               	.L__stack_usage = 0
+ 100               	.LVL9:
+ 101               	.LBB29:
+ 102               	.LBB30:
+ 103               		.loc 2 245 0
+ 104 0000 8DE5      		ldi r24,lo8(93)
+ 105 0002 8A95      	1:	dec r24
+ 106 0004 01F4      		brne 1b
+ 107 0006 00C0      		rjmp .
+ 108 0008 0895      		ret
+ 109               	.LBE30:
+ 110               	.LBE29:
+ 111               		.cfi_endproc
+ 112               	.LFE11:
+ 113               		.size	DelayBaud, .-DelayBaud
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 12
+
+
+ 114               		.section	.text.startup.main,"ax",@progbits
+ 115               	.global	main
+ 116               		.type	main, @function
+ 117               	main:
+ 118               	.LFB16:
+ 268:main.c        ****   DelayBaud();
+ 269:main.c        **** }
+ 270:main.c        **** 
+ 271:main.c        **** int main(void) {
+ 119               		.loc 1 271 0
+ 120               		.cfi_startproc
+ 121               	/* prologue: function */
+ 122               	/* frame size = 0 */
+ 123               	/* stack size = 0 */
+ 124               	.L__stack_usage = 0
+ 272:main.c        ****  
+ 273:main.c        ****   bootLoaderInit();
+ 274:main.c        ****   
+ 275:main.c        ****   if (bootLoaderStartCondition()) {
+ 276:main.c        ****   
+ 277:main.c        ****    DDRB  |= _BV(TX); 
+ 125               		.loc 1 277 0
+ 126 0000 BC9A      		sbi 0x17,4
+ 278:main.c        ****     
+ 279:main.c        ****    currentAddress.w = 0;
+ 127               		.loc 1 279 0
+ 128 0002 412C      		mov r4,__zero_reg__
+ 129 0004 512C      		mov r5,__zero_reg__
+ 130               	.L23:
+ 131               	.LVL10:
+ 271:main.c        ****  
+ 132               		.loc 1 271 0
+ 133 0006 E0E6      		ldi r30,lo8(96)
+ 134 0008 F0E0      		ldi r31,0
+ 135               	.LBB47:
+ 136               	.LBB48:
+ 137               	.LBB49:
+ 207:main.c        ****     do
+ 138               		.loc 1 207 0
+ 139 000a 20E0      		ldi r18,0
+ 140               	.LVL11:
+ 141               	.L15:
+ 142               	.LBB50:
+ 212:main.c        **** 
+ 143               		.loc 1 212 0
+ 144 000c 80E0      		ldi r24,0
+ 145 000e 95E3      		ldi r25,lo8(53)
+ 146 0010 ACE0      		ldi r26,lo8(12)
+ 147 0012 B0E0      		ldi r27,0
+ 211:main.c        ****       uint32_t ctr=800000;
+ 148               		.loc 1 211 0
+ 149 0014 30E0      		ldi r19,0
+ 150               	.LVL12:
+ 151               	.L8:
+ 215:main.c        ****           last=1;
+ 152               		.loc 1 215 0
+ 153 0016 B399      		sbic 0x16,3
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 13
+
+
+ 154 0018 00C0      		rjmp .L25
+ 218:main.c        ****             break;        
+ 155               		.loc 1 218 0
+ 156 001a 3323      		tst r19
+ 157 001c 01F0      		breq .L9
+ 158 001e 00C0      		rjmp .L31
+ 159               	.L25:
+ 216:main.c        ****         } else {
+ 160               		.loc 1 216 0
+ 161 0020 31E0      		ldi r19,lo8(1)
+ 162               	.LVL13:
+ 163               	.L9:
+ 222:main.c        ****             asm volatile ("rjmp __vectors - 2"); 
+ 164               		.loc 1 222 0
+ 165 0022 0097      		sbiw r24,0
+ 166 0024 A105      		cpc r26,__zero_reg__
+ 167 0026 B105      		cpc r27,__zero_reg__
+ 168 0028 01F0      		breq .L32
+ 169 002a 0197      		sbiw r24,1
+ 170 002c A109      		sbc r26,__zero_reg__
+ 171 002e B109      		sbc r27,__zero_reg__
+ 172               	.LVL14:
+ 173 0030 00C0      		rjmp .L8
+ 174               	.LVL15:
+ 175               	.L32:
+ 223:main.c        ****         }
+ 176               		.loc 1 223 0
+ 177               	/* #APP */
+ 178               	 ;  223 "main.c" 1
+ 179 0032 00C0      		rjmp __vectors - 2
+ 180               	 ;  0 "" 2
+ 181               	/* #NOAPP */
+ 182 0034 8FEF      		ldi r24,lo8(-1)
+ 183 0036 9FEF      		ldi r25,lo8(-1)
+ 184 0038 DC01      		movw r26,r24
+ 185               	.LVL16:
+ 186 003a 00C0      		rjmp .L8
+ 187               	.LVL17:
+ 188               	.L31:
+ 189               	.LBB51:
+ 190               	.LBB52:
+ 191               	.LBB53:
+ 192               		.loc 2 245 0
+ 193 003c 3CE2      		ldi r19,lo8(44)
+ 194 003e 3A95      	1:	dec r19
+ 195 0040 01F4      		brne 1b
+ 196               	.LVL18:
+ 197 0042 98E0      		ldi r25,lo8(8)
+ 198               	.LBE53:
+ 199               	.LBE52:
+ 200               	.LBE51:
+ 233:main.c        ****       uint8_t j;
+ 201               		.loc 1 233 0
+ 202 0044 80E0      		ldi r24,0
+ 203               	.LVL19:
+ 204               	.L14:
+ 205               	.LBB54:
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 14
+
+
+ 206               	.LBB55:
+ 207               	.LBB56:
+ 208               		.loc 2 245 0
+ 209 0046 3DE5      		ldi r19,lo8(93)
+ 210 0048 3A95      	1:	dec r19
+ 211 004a 01F4      		brne 1b
+ 212 004c 00C0      		rjmp .
+ 213               	.LBE56:
+ 214               	.LBE55:
+ 215               	.LBE54:
+ 240:main.c        ****         if (PINB&_BV(RX)) data|=0x80;       
+ 216               		.loc 1 240 0
+ 217 004e 8695      		lsr r24
+ 218               	.LVL20:
+ 241:main.c        ****       }       
+ 219               		.loc 1 241 0
+ 220 0050 B399      		sbic 0x16,3
+ 221 0052 8068      		ori r24,lo8(-128)
+ 222               	.LVL21:
+ 223               	.L13:
+ 224 0054 9150      		subi r25,lo8(-(-1))
+ 225               	.LVL22:
+ 236:main.c        ****       {
+ 226               		.loc 1 236 0
+ 227 0056 01F4      		brne .L14
+ 243:main.c        ****       sum+=data;     
+ 228               		.loc 1 243 0
+ 229 0058 8193      		st Z+,r24
+ 230               	.LVL23:
+ 244:main.c        ****     } while (++i<18);         
+ 231               		.loc 1 244 0
+ 232 005a 280F      		add r18,r24
+ 233               	.LVL24:
+ 234               	.LBE50:
+ 245:main.c        **** 
+ 235               		.loc 1 245 0
+ 236 005c E237      		cpi r30,114
+ 237 005e F105      		cpc r31,__zero_reg__
+ 238 0060 01F4      		brne .L15
+ 239               	.LBE49:
+ 240               	.LBE48:
+ 280:main.c        **** 
+ 281:main.c        ****    do {
+ 282:main.c        **** 
+ 283:main.c        ****     uint8_t sum,i;
+ 284:main.c        **** 
+ 285:main.c        ****     sum=GetBlock();
+ 286:main.c        ****     
+ 287:main.c        ****     if (sum==0x59) {
+ 241               		.loc 1 287 0
+ 242 0062 2935      		cpi r18,lo8(89)
+ 243 0064 01F0      		breq .+2
+ 244 0066 00C0      		rjmp .L16
+ 288:main.c        ****       switch(buffer[16+2-1]) 
+ 245               		.loc 1 288 0
+ 246 0068 8091 7100 		lds r24,113
+ 247               	.LVL25:
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 15
+
+
+ 248 006c 8134      		cpi r24,lo8(65)
+ 249 006e 01F0      		breq .L26
+ 250 0070 8234      		cpi r24,lo8(66)
+ 251 0072 01F0      		breq .L27
+ 252 0074 8034      		cpi r24,lo8(64)
+ 253 0076 01F4      		brne .L17
+ 289:main.c        ****       {
+ 290:main.c        ****         case 0x40:  // configuration reply
+ 291:main.c        ****           SendByte(0x11);  // Version
+ 254               		.loc 1 291 0
+ 255 0078 81E1      		ldi r24,lo8(17)
+ 256 007a 00D0      		rcall SendByte
+ 257               	.LVL26:
+ 292:main.c        ****           SendByte(BOOTLOADER_ADDRESS&0xff);  // bootstart_low
+ 258               		.loc 1 292 0
+ 259 007c 80E0      		ldi r24,0
+ 260 007e 00D0      		rcall SendByte
+ 261               	.LVL27:
+ 293:main.c        ****           SendByte(BOOTLOADER_ADDRESS>>8);  // bootstart_high
+ 262               		.loc 1 293 0
+ 263 0080 84E0      		ldi r24,lo8(4)
+ 264 0082 00D0      		rcall SendByte
+ 265               	.LVL28:
+ 294:main.c        ****           break;
+ 266               		.loc 1 294 0
+ 267 0084 00C0      		rjmp .L17
+ 268               	.LVL29:
+ 269               	.L26:
+ 288:main.c        ****       {
+ 270               		.loc 1 288 0
+ 271 0086 E0E0      		ldi r30,0
+ 272 0088 F4E0      		ldi r31,lo8(4)
+ 273               	.LVL30:
+ 274               	.L18:
+ 275               	.LBB57:
+ 276               	.LBB58:
+ 121:main.c        **** #endif    
+ 277               		.loc 1 121 0
+ 278 008a E054      		subi r30,64
+ 279 008c F109      		sbc r31,__zero_reg__
+ 280               	.LVL31:
+ 124:main.c        ****     spm(ptr);
+ 281               		.loc 1 124 0
+ 282 008e 83E1      		ldi r24,lo8(19)
+ 283 0090 87BF      		out 0x37,r24
+ 125:main.c        ****   }
+ 284               		.loc 1 125 0
+ 285               	/* #APP */
+ 286               	 ;  125 "main.c" 1
+ 287 0092 E895      		spm
+ 288               		
+ 289               	 ;  0 "" 2
+ 117:main.c        **** #if (defined __AVR_ATtiny841__)||(defined __AVR_ATtiny441__)    
+ 290               		.loc 1 117 0
+ 291               	/* #NOAPP */
+ 292 0094 3097      		sbiw r30,0
+ 293 0096 01F4      		brne .L18
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 16
+
+
+ 129:main.c        **** }
+ 294               		.loc 1 129 0
+ 295 0098 412C      		mov r4,__zero_reg__
+ 296 009a 512C      		mov r5,__zero_reg__
+ 297 009c 00C0      		rjmp .L17
+ 298               	.LVL32:
+ 299               	.L27:
+ 300               	.LBE58:
+ 301               	.LBE57:
+ 288:main.c        ****       {
+ 302               		.loc 1 288 0
+ 303 009e A0E6      		ldi r26,lo8(96)
+ 304 00a0 B0E0      		ldi r27,0
+ 305               	.LVL33:
+ 306               	.L19:
+ 295:main.c        **** 
+ 296:main.c        ****         case 0x41: // erase flash
+ 297:main.c        ****           eraseApplication();
+ 298:main.c        ****           break;
+ 299:main.c        **** 
+ 300:main.c        ****         case 0x42: // transfer data
+ 301:main.c        ****           for (i=0; i<8; i++)
+ 302:main.c        ****             writeWordToPageBuffer(bufword[i]);
+ 307               		.loc 1 302 0 discriminator 3
+ 308 00a2 8D91      		ld r24,X+
+ 309 00a4 9D91      		ld r25,X+
+ 310               	.LVL34:
+ 311               	.LBB59:
+ 312               	.LBB60:
+ 140:main.c        ****     data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
+ 313               		.loc 1 140 0 discriminator 3
+ 314 00a6 F201      		movw r30,r4
+ 315 00a8 3097      		sbiw r30,0
+ 316 00aa 01F4      		brne .L21
+ 141:main.c        ****   }
+ 317               		.loc 1 141 0
+ 318 00ac 8FEF      		ldi r24,lo8(-1)
+ 319 00ae 91EC      		ldi r25,lo8(-63)
+ 320               	.LVL35:
+ 321               	.L21:
+ 153:main.c        ****   currentAddress.w += 2;
+ 322               		.loc 1 153 0
+ 323 00b0 21E0      		ldi r18,lo8(1)
+ 324               	/* #APP */
+ 325               	 ;  153 "main.c" 1
+ 326 00b2 0C01      		movw  r0, r24
+ 327 00b4 2093 5700 		sts 87, r18
+ 328 00b8 E895      		spm
+ 329 00ba 1124      		clr  r1
+ 330               		
+ 331               	 ;  0 "" 2
+ 154:main.c        **** 
+ 332               		.loc 1 154 0
+ 333               	/* #NOAPP */
+ 334 00bc CF01      		movw r24,r30
+ 335               	.LVL36:
+ 336 00be 0296      		adiw r24,2
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 17
+
+
+ 337 00c0 2C01      		movw r4,r24
+ 156:main.c        ****        __SPM_REG=(__BOOT_PAGE_WRITE|_BV(__SPM_ENABLE));
+ 338               		.loc 1 156 0
+ 339 00c2 842D      		mov r24,r4
+ 340 00c4 8F73      		andi r24,lo8(63)
+ 341 00c6 01F4      		brne .L22
+ 157:main.c        ****       spm((uint16_t)currentAddress.w - 2);
+ 342               		.loc 1 157 0
+ 343 00c8 85E0      		ldi r24,lo8(5)
+ 344 00ca 87BF      		out 0x37,r24
+ 158:main.c        ****   }
+ 345               		.loc 1 158 0
+ 346               	/* #APP */
+ 347               	 ;  158 "main.c" 1
+ 348 00cc E895      		spm
+ 349               		
+ 350               	 ;  0 "" 2
+ 351               	/* #NOAPP */
+ 352               	.L22:
+ 353               	.LVL37:
+ 354               	.LBE60:
+ 355               	.LBE59:
+ 301:main.c        ****             writeWordToPageBuffer(bufword[i]);
+ 356               		.loc 1 301 0 discriminator 3
+ 357 00ce A037      		cpi r26,112
+ 358 00d0 B105      		cpc r27,__zero_reg__
+ 359 00d2 01F4      		brne .L19
+ 360               	.LVL38:
+ 361               	.L17:
+ 303:main.c        ****         break;        
+ 304:main.c        ****       }
+ 305:main.c        ****       SendByte(0xAD);
+ 362               		.loc 1 305 0
+ 363 00d4 8DEA      		ldi r24,lo8(-83)
+ 364 00d6 00D0      		rcall SendByte
+ 365               	.LVL39:
+ 366               	.L16:
+ 367               	.LBE47:
+ 306:main.c        **** 
+ 307:main.c        ****     }
+ 308:main.c        **** 
+ 309:main.c        ****     // if (currentAddress.w>=BOOTLOADER_ADDRESS) break;
+ 310:main.c        ****     
+ 311:main.c        ****     // } while(1);  
+ 312:main.c        ****     } while(currentAddress.w<BOOTLOADER_ADDRESS);  
+ 368               		.loc 1 312 0
+ 369 00d8 4114      		cp r4,__zero_reg__
+ 370 00da 94E0      		ldi r25,4
+ 371 00dc 5906      		cpc r5,r25
+ 372 00de 00F4      		brsh .+2
+ 373 00e0 00C0      		rjmp .L23
+ 313:main.c        ****   }
+ 314:main.c        ****    
+ 315:main.c        ****   asm volatile ("rjmp __vectors - 2"); // jump to application reset vector at end of flash
+ 374               		.loc 1 315 0
+ 375               	/* #APP */
+ 376               	 ;  315 "main.c" 1
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 18
+
+
+ 377 00e2 00C0      		rjmp __vectors - 2
+ 378               	 ;  0 "" 2
+ 379               	/* #NOAPP */
+ 380               	.L24:
+ 316:main.c        ****   
+ 317:main.c        ****    for (;;); // Make sure function does not return to help compiler optimize
+ 381               		.loc 1 317 0 discriminator 1
+ 382 00e4 00C0      		rjmp .L24
+ 383               		.cfi_endproc
+ 384               	.LFE16:
+ 385               		.size	main, .-main
+ 386               		.text
+ 387               	.Letext0:
+ 388               		.file 3 "c:\\program files (x86)\\atmel\\avr tools\\avr toolchain\\avr\\include\\stdint.h"
+ 389               		.section	.debug_info,"",@progbits
+ 390               	.Ldebug_info0:
+ 391 0000 FA04 0000 		.long	0x4fa
+ 392 0004 0200      		.word	0x2
+ 393 0006 0000 0000 		.long	.Ldebug_abbrev0
+ 394 000a 04        		.byte	0x4
+ 395 000b 01        		.uleb128 0x1
+ 396 000c 0000 0000 		.long	.LASF25
+ 397 0010 01        		.byte	0x1
+ 398 0011 0000 0000 		.long	.LASF26
+ 399 0015 0000 0000 		.long	.LASF27
+ 400 0019 0000 0000 		.long	.Ldebug_ranges0+0
+ 401 001d 0000 0000 		.long	0
+ 402 0021 0000 0000 		.long	0
+ 403 0025 0000 0000 		.long	.Ldebug_line0
+ 404 0029 02        		.uleb128 0x2
+ 405 002a 01        		.byte	0x1
+ 406 002b 06        		.byte	0x6
+ 407 002c 0000 0000 		.long	.LASF0
+ 408 0030 03        		.uleb128 0x3
+ 409 0031 0000 0000 		.long	.LASF2
+ 410 0035 03        		.byte	0x3
+ 411 0036 7A        		.byte	0x7a
+ 412 0037 3B00 0000 		.long	0x3b
+ 413 003b 02        		.uleb128 0x2
+ 414 003c 01        		.byte	0x1
+ 415 003d 08        		.byte	0x8
+ 416 003e 0000 0000 		.long	.LASF1
+ 417 0042 04        		.uleb128 0x4
+ 418 0043 02        		.byte	0x2
+ 419 0044 05        		.byte	0x5
+ 420 0045 696E 7400 		.string	"int"
+ 421 0049 03        		.uleb128 0x3
+ 422 004a 0000 0000 		.long	.LASF3
+ 423 004e 03        		.byte	0x3
+ 424 004f 7C        		.byte	0x7c
+ 425 0050 5400 0000 		.long	0x54
+ 426 0054 02        		.uleb128 0x2
+ 427 0055 02        		.byte	0x2
+ 428 0056 07        		.byte	0x7
+ 429 0057 0000 0000 		.long	.LASF4
+ 430 005b 02        		.uleb128 0x2
+ 431 005c 04        		.byte	0x4
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 19
+
+
+ 432 005d 05        		.byte	0x5
+ 433 005e 0000 0000 		.long	.LASF5
+ 434 0062 03        		.uleb128 0x3
+ 435 0063 0000 0000 		.long	.LASF6
+ 436 0067 03        		.byte	0x3
+ 437 0068 7E        		.byte	0x7e
+ 438 0069 6D00 0000 		.long	0x6d
+ 439 006d 02        		.uleb128 0x2
+ 440 006e 04        		.byte	0x4
+ 441 006f 07        		.byte	0x7
+ 442 0070 0000 0000 		.long	.LASF7
+ 443 0074 02        		.uleb128 0x2
+ 444 0075 08        		.byte	0x8
+ 445 0076 05        		.byte	0x5
+ 446 0077 0000 0000 		.long	.LASF8
+ 447 007b 02        		.uleb128 0x2
+ 448 007c 08        		.byte	0x8
+ 449 007d 07        		.byte	0x7
+ 450 007e 0000 0000 		.long	.LASF9
+ 451 0082 05        		.uleb128 0x5
+ 452 0083 02        		.byte	0x2
+ 453 0084 01        		.byte	0x1
+ 454 0085 36        		.byte	0x36
+ 455 0086 9D00 0000 		.long	0x9d
+ 456 008a 06        		.uleb128 0x6
+ 457 008b 7700      		.string	"w"
+ 458 008d 01        		.byte	0x1
+ 459 008e 37        		.byte	0x37
+ 460 008f 4900 0000 		.long	0x49
+ 461 0093 06        		.uleb128 0x6
+ 462 0094 6200      		.string	"b"
+ 463 0096 01        		.byte	0x1
+ 464 0097 38        		.byte	0x38
+ 465 0098 9D00 0000 		.long	0x9d
+ 466 009c 00        		.byte	0
+ 467 009d 07        		.uleb128 0x7
+ 468 009e 3000 0000 		.long	0x30
+ 469 00a2 AD00 0000 		.long	0xad
+ 470 00a6 08        		.uleb128 0x8
+ 471 00a7 AD00 0000 		.long	0xad
+ 472 00ab 01        		.byte	0x1
+ 473 00ac 00        		.byte	0
+ 474 00ad 02        		.uleb128 0x2
+ 475 00ae 02        		.byte	0x2
+ 476 00af 07        		.byte	0x7
+ 477 00b0 0000 0000 		.long	.LASF10
+ 478 00b4 03        		.uleb128 0x3
+ 479 00b5 0000 0000 		.long	.LASF11
+ 480 00b9 01        		.byte	0x1
+ 481 00ba 39        		.byte	0x39
+ 482 00bb 8200 0000 		.long	0x82
+ 483 00bf 09        		.uleb128 0x9
+ 484 00c0 0000 0000 		.long	.LASF19
+ 485 00c4 02        		.byte	0x2
+ 486 00c5 E0        		.byte	0xe0
+ 487 00c6 01        		.byte	0x1
+ 488 00c7 03        		.byte	0x3
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 20
+
+
+ 489 00c8 F800 0000 		.long	0xf8
+ 490 00cc 0A        		.uleb128 0xa
+ 491 00cd 0000 0000 		.long	.LASF22
+ 492 00d1 02        		.byte	0x2
+ 493 00d2 E0        		.byte	0xe0
+ 494 00d3 F800 0000 		.long	0xf8
+ 495 00d7 0B        		.uleb128 0xb
+ 496 00d8 0000 0000 		.long	.LASF12
+ 497 00dc 02        		.byte	0x2
+ 498 00dd E2        		.byte	0xe2
+ 499 00de F800 0000 		.long	0xf8
+ 500 00e2 0B        		.uleb128 0xb
+ 501 00e3 0000 0000 		.long	.LASF13
+ 502 00e7 02        		.byte	0x2
+ 503 00e8 E6        		.byte	0xe6
+ 504 00e9 6200 0000 		.long	0x62
+ 505 00ed 0C        		.uleb128 0xc
+ 506 00ee 01        		.byte	0x1
+ 507 00ef 0000 0000 		.long	.LASF15
+ 508 00f3 02        		.byte	0x2
+ 509 00f4 E7        		.byte	0xe7
+ 510 00f5 01        		.byte	0x1
+ 511 00f6 00        		.byte	0
+ 512 00f7 00        		.byte	0
+ 513 00f8 02        		.uleb128 0x2
+ 514 00f9 04        		.byte	0x4
+ 515 00fa 04        		.byte	0x4
+ 516 00fb 0000 0000 		.long	.LASF14
+ 517 00ff 0C        		.uleb128 0xc
+ 518 0100 01        		.byte	0x1
+ 519 0101 0000 0000 		.long	.LASF16
+ 520 0105 01        		.byte	0x1
+ 521 0106 A9        		.byte	0xa9
+ 522 0107 01        		.byte	0x1
+ 523 0108 01        		.byte	0x1
+ 524 0109 0D        		.uleb128 0xd
+ 525 010a 0000 0000 		.long	.LASF28
+ 526 010e 01        		.byte	0x1
+ 527 010f FA        		.byte	0xfa
+ 528 0110 01        		.byte	0x1
+ 529 0111 0000 0000 		.long	.LFB15
+ 530 0115 0000 0000 		.long	.LFE15
+ 531 0119 03        		.byte	0x3
+ 532 011a 92        		.byte	0x92
+ 533 011b 20        		.uleb128 0x20
+ 534 011c 02        		.sleb128 2
+ 535 011d 01        		.byte	0x1
+ 536 011e 1802 0000 		.long	0x218
+ 537 0122 0E        		.uleb128 0xe
+ 538 0123 0000 0000 		.long	.LASF18
+ 539 0127 01        		.byte	0x1
+ 540 0128 FA        		.byte	0xfa
+ 541 0129 3000 0000 		.long	0x30
+ 542 012d 0000 0000 		.long	.LLST0
+ 543 0131 0F        		.uleb128 0xf
+ 544 0132 6900      		.string	"i"
+ 545 0134 01        		.byte	0x1
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 21
+
+
+ 546 0135 FC        		.byte	0xfc
+ 547 0136 3000 0000 		.long	0x30
+ 548 013a 0000 0000 		.long	.LLST1
+ 549 013e 10        		.uleb128 0x10
+ 550 013f FF00 0000 		.long	0xff
+ 551 0143 0000 0000 		.long	.LBB18
+ 552 0147 0000 0000 		.long	.LBE18
+ 553 014b 01        		.byte	0x1
+ 554 014c FF        		.byte	0xff
+ 555 014d 8701 0000 		.long	0x187
+ 556 0151 11        		.uleb128 0x11
+ 557 0152 BF00 0000 		.long	0xbf
+ 558 0156 0000 0000 		.long	.LBB19
+ 559 015a 0000 0000 		.long	.LBE19
+ 560 015e 01        		.byte	0x1
+ 561 015f AB        		.byte	0xab
+ 562 0160 12        		.uleb128 0x12
+ 563 0161 CC00 0000 		.long	0xcc
+ 564 0165 04        		.byte	0x4
+ 565 0166 0000 8841 		.long	0x41880000
+ 566 016a 13        		.uleb128 0x13
+ 567 016b 0000 0000 		.long	.LBB20
+ 568 016f 0000 0000 		.long	.LBE20
+ 569 0173 14        		.uleb128 0x14
+ 570 0174 D700 0000 		.long	0xd7
+ 571 0178 04        		.byte	0x4
+ 572 0179 0040 8C43 		.long	0x438c4000
+ 573 017d 15        		.uleb128 0x15
+ 574 017e E200 0000 		.long	0xe2
+ 575 0182 1901      		.word	0x119
+ 576 0184 00        		.byte	0
+ 577 0185 00        		.byte	0
+ 578 0186 00        		.byte	0
+ 579 0187 16        		.uleb128 0x16
+ 580 0188 FF00 0000 		.long	0xff
+ 581 018c 0000 0000 		.long	.LBB21
+ 582 0190 0000 0000 		.long	.LBE21
+ 583 0194 01        		.byte	0x1
+ 584 0195 0801      		.word	0x108
+ 585 0197 D101 0000 		.long	0x1d1
+ 586 019b 11        		.uleb128 0x11
+ 587 019c BF00 0000 		.long	0xbf
+ 588 01a0 0000 0000 		.long	.LBB22
+ 589 01a4 0000 0000 		.long	.LBE22
+ 590 01a8 01        		.byte	0x1
+ 591 01a9 AB        		.byte	0xab
+ 592 01aa 12        		.uleb128 0x12
+ 593 01ab CC00 0000 		.long	0xcc
+ 594 01af 04        		.byte	0x4
+ 595 01b0 0000 8841 		.long	0x41880000
+ 596 01b4 13        		.uleb128 0x13
+ 597 01b5 0000 0000 		.long	.LBB23
+ 598 01b9 0000 0000 		.long	.LBE23
+ 599 01bd 14        		.uleb128 0x14
+ 600 01be D700 0000 		.long	0xd7
+ 601 01c2 04        		.byte	0x4
+ 602 01c3 0040 8C43 		.long	0x438c4000
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 22
+
+
+ 603 01c7 15        		.uleb128 0x15
+ 604 01c8 E200 0000 		.long	0xe2
+ 605 01cc 1901      		.word	0x119
+ 606 01ce 00        		.byte	0
+ 607 01cf 00        		.byte	0
+ 608 01d0 00        		.byte	0
+ 609 01d1 17        		.uleb128 0x17
+ 610 01d2 FF00 0000 		.long	0xff
+ 611 01d6 0000 0000 		.long	.LBB24
+ 612 01da 0000 0000 		.long	.LBE24
+ 613 01de 01        		.byte	0x1
+ 614 01df 0C01      		.word	0x10c
+ 615 01e1 11        		.uleb128 0x11
+ 616 01e2 BF00 0000 		.long	0xbf
+ 617 01e6 0000 0000 		.long	.LBB25
+ 618 01ea 0000 0000 		.long	.LBE25
+ 619 01ee 01        		.byte	0x1
+ 620 01ef AB        		.byte	0xab
+ 621 01f0 12        		.uleb128 0x12
+ 622 01f1 CC00 0000 		.long	0xcc
+ 623 01f5 04        		.byte	0x4
+ 624 01f6 0000 8841 		.long	0x41880000
+ 625 01fa 13        		.uleb128 0x13
+ 626 01fb 0000 0000 		.long	.LBB26
+ 627 01ff 0000 0000 		.long	.LBE26
+ 628 0203 14        		.uleb128 0x14
+ 629 0204 D700 0000 		.long	0xd7
+ 630 0208 04        		.byte	0x4
+ 631 0209 0040 8C43 		.long	0x438c4000
+ 632 020d 15        		.uleb128 0x15
+ 633 020e E200 0000 		.long	0xe2
+ 634 0212 1901      		.word	0x119
+ 635 0214 00        		.byte	0
+ 636 0215 00        		.byte	0
+ 637 0216 00        		.byte	0
+ 638 0217 00        		.byte	0
+ 639 0218 18        		.uleb128 0x18
+ 640 0219 FF00 0000 		.long	0xff
+ 641 021d 0000 0000 		.long	.LFB11
+ 642 0221 0000 0000 		.long	.LFE11
+ 643 0225 03        		.byte	0x3
+ 644 0226 92        		.byte	0x92
+ 645 0227 20        		.uleb128 0x20
+ 646 0228 02        		.sleb128 2
+ 647 0229 01        		.byte	0x1
+ 648 022a 6402 0000 		.long	0x264
+ 649 022e 11        		.uleb128 0x11
+ 650 022f BF00 0000 		.long	0xbf
+ 651 0233 0000 0000 		.long	.LBB29
+ 652 0237 0000 0000 		.long	.LBE29
+ 653 023b 01        		.byte	0x1
+ 654 023c AB        		.byte	0xab
+ 655 023d 12        		.uleb128 0x12
+ 656 023e CC00 0000 		.long	0xcc
+ 657 0242 04        		.byte	0x4
+ 658 0243 0000 8841 		.long	0x41880000
+ 659 0247 13        		.uleb128 0x13
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 23
+
+
+ 660 0248 0000 0000 		.long	.LBB30
+ 661 024c 0000 0000 		.long	.LBE30
+ 662 0250 14        		.uleb128 0x14
+ 663 0251 D700 0000 		.long	0xd7
+ 664 0255 04        		.byte	0x4
+ 665 0256 0040 8C43 		.long	0x438c4000
+ 666 025a 15        		.uleb128 0x15
+ 667 025b E200 0000 		.long	0xe2
+ 668 025f 1901      		.word	0x119
+ 669 0261 00        		.byte	0
+ 670 0262 00        		.byte	0
+ 671 0263 00        		.byte	0
+ 672 0264 19        		.uleb128 0x19
+ 673 0265 0000 0000 		.long	.LASF29
+ 674 0269 01        		.byte	0x1
+ 675 026a CD        		.byte	0xcd
+ 676 026b 01        		.byte	0x1
+ 677 026c 3000 0000 		.long	0x30
+ 678 0270 01        		.byte	0x1
+ 679 0271 BF02 0000 		.long	0x2bf
+ 680 0275 1A        		.uleb128 0x1a
+ 681 0276 7375 6D00 		.string	"sum"
+ 682 027a 01        		.byte	0x1
+ 683 027b CF        		.byte	0xcf
+ 684 027c 3000 0000 		.long	0x30
+ 685 0280 1A        		.uleb128 0x1a
+ 686 0281 6200      		.string	"b"
+ 687 0283 01        		.byte	0x1
+ 688 0284 CF        		.byte	0xcf
+ 689 0285 3000 0000 		.long	0x30
+ 690 0289 1A        		.uleb128 0x1a
+ 691 028a 6900      		.string	"i"
+ 692 028c 01        		.byte	0x1
+ 693 028d CF        		.byte	0xcf
+ 694 028e 3000 0000 		.long	0x30
+ 695 0292 1B        		.uleb128 0x1b
+ 696 0293 0B        		.uleb128 0xb
+ 697 0294 0000 0000 		.long	.LASF17
+ 698 0298 01        		.byte	0x1
+ 699 0299 D3        		.byte	0xd3
+ 700 029a 3000 0000 		.long	0x30
+ 701 029e 1A        		.uleb128 0x1a
+ 702 029f 6374 7200 		.string	"ctr"
+ 703 02a3 01        		.byte	0x1
+ 704 02a4 D4        		.byte	0xd4
+ 705 02a5 6200 0000 		.long	0x62
+ 706 02a9 0B        		.uleb128 0xb
+ 707 02aa 0000 0000 		.long	.LASF18
+ 708 02ae 01        		.byte	0x1
+ 709 02af E9        		.byte	0xe9
+ 710 02b0 3000 0000 		.long	0x30
+ 711 02b4 1A        		.uleb128 0x1a
+ 712 02b5 6A00      		.string	"j"
+ 713 02b7 01        		.byte	0x1
+ 714 02b8 EA        		.byte	0xea
+ 715 02b9 3000 0000 		.long	0x30
+ 716 02bd 00        		.byte	0
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 24
+
+
+ 717 02be 00        		.byte	0
+ 718 02bf 1C        		.uleb128 0x1c
+ 719 02c0 0000 0000 		.long	.LASF30
+ 720 02c4 01        		.byte	0x1
+ 721 02c5 AE        		.byte	0xae
+ 722 02c6 01        		.byte	0x1
+ 723 02c7 01        		.byte	0x1
+ 724 02c8 09        		.uleb128 0x9
+ 725 02c9 0000 0000 		.long	.LASF20
+ 726 02cd 01        		.byte	0x1
+ 727 02ce 72        		.byte	0x72
+ 728 02cf 01        		.byte	0x1
+ 729 02d0 03        		.byte	0x3
+ 730 02d1 E102 0000 		.long	0x2e1
+ 731 02d5 1A        		.uleb128 0x1a
+ 732 02d6 7074 7200 		.string	"ptr"
+ 733 02da 01        		.byte	0x1
+ 734 02db 73        		.byte	0x73
+ 735 02dc 4900 0000 		.long	0x49
+ 736 02e0 00        		.byte	0
+ 737 02e1 09        		.uleb128 0x9
+ 738 02e2 0000 0000 		.long	.LASF21
+ 739 02e6 01        		.byte	0x1
+ 740 02e7 87        		.byte	0x87
+ 741 02e8 01        		.byte	0x1
+ 742 02e9 01        		.byte	0x1
+ 743 02ea FA02 0000 		.long	0x2fa
+ 744 02ee 0A        		.uleb128 0xa
+ 745 02ef 0000 0000 		.long	.LASF18
+ 746 02f3 01        		.byte	0x1
+ 747 02f4 87        		.byte	0x87
+ 748 02f5 4900 0000 		.long	0x49
+ 749 02f9 00        		.byte	0
+ 750 02fa 1D        		.uleb128 0x1d
+ 751 02fb 01        		.byte	0x1
+ 752 02fc 0000 0000 		.long	.LASF31
+ 753 0300 01        		.byte	0x1
+ 754 0301 0F01      		.word	0x10f
+ 755 0303 01        		.byte	0x1
+ 756 0304 4200 0000 		.long	0x42
+ 757 0308 0000 0000 		.long	.LFB16
+ 758 030c 0000 0000 		.long	.LFE16
+ 759 0310 03        		.byte	0x3
+ 760 0311 92        		.byte	0x92
+ 761 0312 20        		.uleb128 0x20
+ 762 0313 02        		.sleb128 2
+ 763 0314 01        		.byte	0x1
+ 764 0315 BC04 0000 		.long	0x4bc
+ 765 0319 13        		.uleb128 0x13
+ 766 031a 0000 0000 		.long	.LBB47
+ 767 031e 0000 0000 		.long	.LBE47
+ 768 0322 1E        		.uleb128 0x1e
+ 769 0323 7375 6D00 		.string	"sum"
+ 770 0327 01        		.byte	0x1
+ 771 0328 1B01      		.word	0x11b
+ 772 032a 3000 0000 		.long	0x30
+ 773 032e 01        		.byte	0x1
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 25
+
+
+ 774 032f 62        		.byte	0x62
+ 775 0330 1F        		.uleb128 0x1f
+ 776 0331 6900      		.string	"i"
+ 777 0333 01        		.byte	0x1
+ 778 0334 1B01      		.word	0x11b
+ 779 0336 3000 0000 		.long	0x30
+ 780 033a 16        		.uleb128 0x16
+ 781 033b 6402 0000 		.long	0x264
+ 782 033f 0000 0000 		.long	.LBB48
+ 783 0343 0000 0000 		.long	.LBE48
+ 784 0347 01        		.byte	0x1
+ 785 0348 1D01      		.word	0x11d
+ 786 034a 2B04 0000 		.long	0x42b
+ 787 034e 13        		.uleb128 0x13
+ 788 034f 0000 0000 		.long	.LBB49
+ 789 0353 0000 0000 		.long	.LBE49
+ 790 0357 20        		.uleb128 0x20
+ 791 0358 7502 0000 		.long	0x275
+ 792 035c 0000 0000 		.long	.LLST2
+ 793 0360 21        		.uleb128 0x21
+ 794 0361 8002 0000 		.long	0x280
+ 795 0365 20        		.uleb128 0x20
+ 796 0366 8902 0000 		.long	0x289
+ 797 036a 0000 0000 		.long	.LLST3
+ 798 036e 13        		.uleb128 0x13
+ 799 036f 0000 0000 		.long	.LBB50
+ 800 0373 0000 0000 		.long	.LBE50
+ 801 0377 20        		.uleb128 0x20
+ 802 0378 9302 0000 		.long	0x293
+ 803 037c 0000 0000 		.long	.LLST4
+ 804 0380 20        		.uleb128 0x20
+ 805 0381 9E02 0000 		.long	0x29e
+ 806 0385 0000 0000 		.long	.LLST5
+ 807 0389 20        		.uleb128 0x20
+ 808 038a A902 0000 		.long	0x2a9
+ 809 038e 0000 0000 		.long	.LLST6
+ 810 0392 20        		.uleb128 0x20
+ 811 0393 B402 0000 		.long	0x2b4
+ 812 0397 0000 0000 		.long	.LLST7
+ 813 039b 10        		.uleb128 0x10
+ 814 039c BF02 0000 		.long	0x2bf
+ 815 03a0 0000 0000 		.long	.LBB51
+ 816 03a4 0000 0000 		.long	.LBE51
+ 817 03a8 01        		.byte	0x1
+ 818 03a9 E7        		.byte	0xe7
+ 819 03aa E303 0000 		.long	0x3e3
+ 820 03ae 11        		.uleb128 0x11
+ 821 03af BF00 0000 		.long	0xbf
+ 822 03b3 0000 0000 		.long	.LBB52
+ 823 03b7 0000 0000 		.long	.LBE52
+ 824 03bb 01        		.byte	0x1
+ 825 03bc B0        		.byte	0xb0
+ 826 03bd 12        		.uleb128 0x12
+ 827 03be CC00 0000 		.long	0xcc
+ 828 03c2 04        		.byte	0x4
+ 829 03c3 0000 0041 		.long	0x41000000
+ 830 03c7 13        		.uleb128 0x13
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 26
+
+
+ 831 03c8 0000 0000 		.long	.LBB53
+ 832 03cc 0000 0000 		.long	.LBE53
+ 833 03d0 14        		.uleb128 0x14
+ 834 03d1 D700 0000 		.long	0xd7
+ 835 03d5 04        		.byte	0x4
+ 836 03d6 0000 0443 		.long	0x43040000
+ 837 03da 22        		.uleb128 0x22
+ 838 03db E200 0000 		.long	0xe2
+ 839 03df 84        		.byte	0x84
+ 840 03e0 00        		.byte	0
+ 841 03e1 00        		.byte	0
+ 842 03e2 00        		.byte	0
+ 843 03e3 11        		.uleb128 0x11
+ 844 03e4 FF00 0000 		.long	0xff
+ 845 03e8 0000 0000 		.long	.LBB54
+ 846 03ec 0000 0000 		.long	.LBE54
+ 847 03f0 01        		.byte	0x1
+ 848 03f1 EE        		.byte	0xee
+ 849 03f2 11        		.uleb128 0x11
+ 850 03f3 BF00 0000 		.long	0xbf
+ 851 03f7 0000 0000 		.long	.LBB55
+ 852 03fb 0000 0000 		.long	.LBE55
+ 853 03ff 01        		.byte	0x1
+ 854 0400 AB        		.byte	0xab
+ 855 0401 12        		.uleb128 0x12
+ 856 0402 CC00 0000 		.long	0xcc
+ 857 0406 04        		.byte	0x4
+ 858 0407 0000 8841 		.long	0x41880000
+ 859 040b 13        		.uleb128 0x13
+ 860 040c 0000 0000 		.long	.LBB56
+ 861 0410 0000 0000 		.long	.LBE56
+ 862 0414 14        		.uleb128 0x14
+ 863 0415 D700 0000 		.long	0xd7
+ 864 0419 04        		.byte	0x4
+ 865 041a 0040 8C43 		.long	0x438c4000
+ 866 041e 15        		.uleb128 0x15
+ 867 041f E200 0000 		.long	0xe2
+ 868 0423 1901      		.word	0x119
+ 869 0425 00        		.byte	0
+ 870 0426 00        		.byte	0
+ 871 0427 00        		.byte	0
+ 872 0428 00        		.byte	0
+ 873 0429 00        		.byte	0
+ 874 042a 00        		.byte	0
+ 875 042b 16        		.uleb128 0x16
+ 876 042c C802 0000 		.long	0x2c8
+ 877 0430 0000 0000 		.long	.LBB57
+ 878 0434 0000 0000 		.long	.LBE57
+ 879 0438 01        		.byte	0x1
+ 880 0439 2901      		.word	0x129
+ 881 043b 5304 0000 		.long	0x453
+ 882 043f 13        		.uleb128 0x13
+ 883 0440 0000 0000 		.long	.LBB58
+ 884 0444 0000 0000 		.long	.LBE58
+ 885 0448 20        		.uleb128 0x20
+ 886 0449 D502 0000 		.long	0x2d5
+ 887 044d 0000 0000 		.long	.LLST8
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 27
+
+
+ 888 0451 00        		.byte	0
+ 889 0452 00        		.byte	0
+ 890 0453 16        		.uleb128 0x16
+ 891 0454 E102 0000 		.long	0x2e1
+ 892 0458 0000 0000 		.long	.LBB59
+ 893 045c 0000 0000 		.long	.LBE59
+ 894 0460 01        		.byte	0x1
+ 895 0461 2E01      		.word	0x12e
+ 896 0463 7104 0000 		.long	0x471
+ 897 0467 23        		.uleb128 0x23
+ 898 0468 EE02 0000 		.long	0x2ee
+ 899 046c 0000 0000 		.long	.LLST9
+ 900 0470 00        		.byte	0
+ 901 0471 24        		.uleb128 0x24
+ 902 0472 0000 0000 		.long	.LVL26
+ 903 0476 0901 0000 		.long	0x109
+ 904 047a 8404 0000 		.long	0x484
+ 905 047e 25        		.uleb128 0x25
+ 906 047f 01        		.byte	0x1
+ 907 0480 68        		.byte	0x68
+ 908 0481 01        		.byte	0x1
+ 909 0482 41        		.byte	0x41
+ 910 0483 00        		.byte	0
+ 911 0484 24        		.uleb128 0x24
+ 912 0485 0000 0000 		.long	.LVL27
+ 913 0489 0901 0000 		.long	0x109
+ 914 048d 9704 0000 		.long	0x497
+ 915 0491 25        		.uleb128 0x25
+ 916 0492 01        		.byte	0x1
+ 917 0493 68        		.byte	0x68
+ 918 0494 01        		.byte	0x1
+ 919 0495 30        		.byte	0x30
+ 920 0496 00        		.byte	0
+ 921 0497 24        		.uleb128 0x24
+ 922 0498 0000 0000 		.long	.LVL28
+ 923 049c 0901 0000 		.long	0x109
+ 924 04a0 AA04 0000 		.long	0x4aa
+ 925 04a4 25        		.uleb128 0x25
+ 926 04a5 01        		.byte	0x1
+ 927 04a6 68        		.byte	0x68
+ 928 04a7 01        		.byte	0x1
+ 929 04a8 34        		.byte	0x34
+ 930 04a9 00        		.byte	0
+ 931 04aa 26        		.uleb128 0x26
+ 932 04ab 0000 0000 		.long	.LVL39
+ 933 04af 0901 0000 		.long	0x109
+ 934 04b3 25        		.uleb128 0x25
+ 935 04b4 01        		.byte	0x1
+ 936 04b5 68        		.byte	0x68
+ 937 04b6 02        		.byte	0x2
+ 938 04b7 09        		.byte	0x9
+ 939 04b8 AD        		.byte	0xad
+ 940 04b9 00        		.byte	0
+ 941 04ba 00        		.byte	0
+ 942 04bb 00        		.byte	0
+ 943 04bc 27        		.uleb128 0x27
+ 944 04bd 0000 0000 		.long	.LASF23
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 28
+
+
+ 945 04c1 01        		.byte	0x1
+ 946 04c2 41        		.byte	0x41
+ 947 04c3 C804 0000 		.long	0x4c8
+ 948 04c7 60        		.byte	0x60
+ 949 04c8 28        		.uleb128 0x28
+ 950 04c9 CD04 0000 		.long	0x4cd
+ 951 04cd 29        		.uleb128 0x29
+ 952 04ce 02        		.byte	0x2
+ 953 04cf 3000 0000 		.long	0x30
+ 954 04d3 27        		.uleb128 0x27
+ 955 04d4 0000 0000 		.long	.LASF24
+ 956 04d8 01        		.byte	0x1
+ 957 04d9 42        		.byte	0x42
+ 958 04da DF04 0000 		.long	0x4df
+ 959 04de 60        		.byte	0x60
+ 960 04df 28        		.uleb128 0x28
+ 961 04e0 E404 0000 		.long	0x4e4
+ 962 04e4 29        		.uleb128 0x29
+ 963 04e5 02        		.byte	0x2
+ 964 04e6 4900 0000 		.long	0x49
+ 965 04ea 2A        		.uleb128 0x2a
+ 966 04eb 0000 0000 		.long	.LASF32
+ 967 04ef 01        		.byte	0x1
+ 968 04f0 3E        		.byte	0x3e
+ 969 04f1 B400 0000 		.long	0xb4
+ 970 04f5 01        		.byte	0x1
+ 971 04f6 06        		.byte	0x6
+ 972 04f7 54        		.byte	0x54
+ 973 04f8 93        		.byte	0x93
+ 974 04f9 01        		.uleb128 0x1
+ 975 04fa 55        		.byte	0x55
+ 976 04fb 93        		.byte	0x93
+ 977 04fc 01        		.uleb128 0x1
+ 978 04fd 00        		.byte	0
+ 979               		.section	.debug_abbrev,"",@progbits
+ 980               	.Ldebug_abbrev0:
+ 981 0000 01        		.uleb128 0x1
+ 982 0001 11        		.uleb128 0x11
+ 983 0002 01        		.byte	0x1
+ 984 0003 25        		.uleb128 0x25
+ 985 0004 0E        		.uleb128 0xe
+ 986 0005 13        		.uleb128 0x13
+ 987 0006 0B        		.uleb128 0xb
+ 988 0007 03        		.uleb128 0x3
+ 989 0008 0E        		.uleb128 0xe
+ 990 0009 1B        		.uleb128 0x1b
+ 991 000a 0E        		.uleb128 0xe
+ 992 000b 55        		.uleb128 0x55
+ 993 000c 06        		.uleb128 0x6
+ 994 000d 11        		.uleb128 0x11
+ 995 000e 01        		.uleb128 0x1
+ 996 000f 52        		.uleb128 0x52
+ 997 0010 01        		.uleb128 0x1
+ 998 0011 10        		.uleb128 0x10
+ 999 0012 06        		.uleb128 0x6
+ 1000 0013 00        		.byte	0
+ 1001 0014 00        		.byte	0
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 29
+
+
+ 1002 0015 02        		.uleb128 0x2
+ 1003 0016 24        		.uleb128 0x24
+ 1004 0017 00        		.byte	0
+ 1005 0018 0B        		.uleb128 0xb
+ 1006 0019 0B        		.uleb128 0xb
+ 1007 001a 3E        		.uleb128 0x3e
+ 1008 001b 0B        		.uleb128 0xb
+ 1009 001c 03        		.uleb128 0x3
+ 1010 001d 0E        		.uleb128 0xe
+ 1011 001e 00        		.byte	0
+ 1012 001f 00        		.byte	0
+ 1013 0020 03        		.uleb128 0x3
+ 1014 0021 16        		.uleb128 0x16
+ 1015 0022 00        		.byte	0
+ 1016 0023 03        		.uleb128 0x3
+ 1017 0024 0E        		.uleb128 0xe
+ 1018 0025 3A        		.uleb128 0x3a
+ 1019 0026 0B        		.uleb128 0xb
+ 1020 0027 3B        		.uleb128 0x3b
+ 1021 0028 0B        		.uleb128 0xb
+ 1022 0029 49        		.uleb128 0x49
+ 1023 002a 13        		.uleb128 0x13
+ 1024 002b 00        		.byte	0
+ 1025 002c 00        		.byte	0
+ 1026 002d 04        		.uleb128 0x4
+ 1027 002e 24        		.uleb128 0x24
+ 1028 002f 00        		.byte	0
+ 1029 0030 0B        		.uleb128 0xb
+ 1030 0031 0B        		.uleb128 0xb
+ 1031 0032 3E        		.uleb128 0x3e
+ 1032 0033 0B        		.uleb128 0xb
+ 1033 0034 03        		.uleb128 0x3
+ 1034 0035 08        		.uleb128 0x8
+ 1035 0036 00        		.byte	0
+ 1036 0037 00        		.byte	0
+ 1037 0038 05        		.uleb128 0x5
+ 1038 0039 17        		.uleb128 0x17
+ 1039 003a 01        		.byte	0x1
+ 1040 003b 0B        		.uleb128 0xb
+ 1041 003c 0B        		.uleb128 0xb
+ 1042 003d 3A        		.uleb128 0x3a
+ 1043 003e 0B        		.uleb128 0xb
+ 1044 003f 3B        		.uleb128 0x3b
+ 1045 0040 0B        		.uleb128 0xb
+ 1046 0041 01        		.uleb128 0x1
+ 1047 0042 13        		.uleb128 0x13
+ 1048 0043 00        		.byte	0
+ 1049 0044 00        		.byte	0
+ 1050 0045 06        		.uleb128 0x6
+ 1051 0046 0D        		.uleb128 0xd
+ 1052 0047 00        		.byte	0
+ 1053 0048 03        		.uleb128 0x3
+ 1054 0049 08        		.uleb128 0x8
+ 1055 004a 3A        		.uleb128 0x3a
+ 1056 004b 0B        		.uleb128 0xb
+ 1057 004c 3B        		.uleb128 0x3b
+ 1058 004d 0B        		.uleb128 0xb
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 30
+
+
+ 1059 004e 49        		.uleb128 0x49
+ 1060 004f 13        		.uleb128 0x13
+ 1061 0050 00        		.byte	0
+ 1062 0051 00        		.byte	0
+ 1063 0052 07        		.uleb128 0x7
+ 1064 0053 01        		.uleb128 0x1
+ 1065 0054 01        		.byte	0x1
+ 1066 0055 49        		.uleb128 0x49
+ 1067 0056 13        		.uleb128 0x13
+ 1068 0057 01        		.uleb128 0x1
+ 1069 0058 13        		.uleb128 0x13
+ 1070 0059 00        		.byte	0
+ 1071 005a 00        		.byte	0
+ 1072 005b 08        		.uleb128 0x8
+ 1073 005c 21        		.uleb128 0x21
+ 1074 005d 00        		.byte	0
+ 1075 005e 49        		.uleb128 0x49
+ 1076 005f 13        		.uleb128 0x13
+ 1077 0060 2F        		.uleb128 0x2f
+ 1078 0061 0B        		.uleb128 0xb
+ 1079 0062 00        		.byte	0
+ 1080 0063 00        		.byte	0
+ 1081 0064 09        		.uleb128 0x9
+ 1082 0065 2E        		.uleb128 0x2e
+ 1083 0066 01        		.byte	0x1
+ 1084 0067 03        		.uleb128 0x3
+ 1085 0068 0E        		.uleb128 0xe
+ 1086 0069 3A        		.uleb128 0x3a
+ 1087 006a 0B        		.uleb128 0xb
+ 1088 006b 3B        		.uleb128 0x3b
+ 1089 006c 0B        		.uleb128 0xb
+ 1090 006d 27        		.uleb128 0x27
+ 1091 006e 0C        		.uleb128 0xc
+ 1092 006f 20        		.uleb128 0x20
+ 1093 0070 0B        		.uleb128 0xb
+ 1094 0071 01        		.uleb128 0x1
+ 1095 0072 13        		.uleb128 0x13
+ 1096 0073 00        		.byte	0
+ 1097 0074 00        		.byte	0
+ 1098 0075 0A        		.uleb128 0xa
+ 1099 0076 05        		.uleb128 0x5
+ 1100 0077 00        		.byte	0
+ 1101 0078 03        		.uleb128 0x3
+ 1102 0079 0E        		.uleb128 0xe
+ 1103 007a 3A        		.uleb128 0x3a
+ 1104 007b 0B        		.uleb128 0xb
+ 1105 007c 3B        		.uleb128 0x3b
+ 1106 007d 0B        		.uleb128 0xb
+ 1107 007e 49        		.uleb128 0x49
+ 1108 007f 13        		.uleb128 0x13
+ 1109 0080 00        		.byte	0
+ 1110 0081 00        		.byte	0
+ 1111 0082 0B        		.uleb128 0xb
+ 1112 0083 34        		.uleb128 0x34
+ 1113 0084 00        		.byte	0
+ 1114 0085 03        		.uleb128 0x3
+ 1115 0086 0E        		.uleb128 0xe
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 31
+
+
+ 1116 0087 3A        		.uleb128 0x3a
+ 1117 0088 0B        		.uleb128 0xb
+ 1118 0089 3B        		.uleb128 0x3b
+ 1119 008a 0B        		.uleb128 0xb
+ 1120 008b 49        		.uleb128 0x49
+ 1121 008c 13        		.uleb128 0x13
+ 1122 008d 00        		.byte	0
+ 1123 008e 00        		.byte	0
+ 1124 008f 0C        		.uleb128 0xc
+ 1125 0090 2E        		.uleb128 0x2e
+ 1126 0091 00        		.byte	0
+ 1127 0092 3F        		.uleb128 0x3f
+ 1128 0093 0C        		.uleb128 0xc
+ 1129 0094 03        		.uleb128 0x3
+ 1130 0095 0E        		.uleb128 0xe
+ 1131 0096 3A        		.uleb128 0x3a
+ 1132 0097 0B        		.uleb128 0xb
+ 1133 0098 3B        		.uleb128 0x3b
+ 1134 0099 0B        		.uleb128 0xb
+ 1135 009a 27        		.uleb128 0x27
+ 1136 009b 0C        		.uleb128 0xc
+ 1137 009c 20        		.uleb128 0x20
+ 1138 009d 0B        		.uleb128 0xb
+ 1139 009e 00        		.byte	0
+ 1140 009f 00        		.byte	0
+ 1141 00a0 0D        		.uleb128 0xd
+ 1142 00a1 2E        		.uleb128 0x2e
+ 1143 00a2 01        		.byte	0x1
+ 1144 00a3 03        		.uleb128 0x3
+ 1145 00a4 0E        		.uleb128 0xe
+ 1146 00a5 3A        		.uleb128 0x3a
+ 1147 00a6 0B        		.uleb128 0xb
+ 1148 00a7 3B        		.uleb128 0x3b
+ 1149 00a8 0B        		.uleb128 0xb
+ 1150 00a9 27        		.uleb128 0x27
+ 1151 00aa 0C        		.uleb128 0xc
+ 1152 00ab 11        		.uleb128 0x11
+ 1153 00ac 01        		.uleb128 0x1
+ 1154 00ad 12        		.uleb128 0x12
+ 1155 00ae 01        		.uleb128 0x1
+ 1156 00af 40        		.uleb128 0x40
+ 1157 00b0 0A        		.uleb128 0xa
+ 1158 00b1 9742      		.uleb128 0x2117
+ 1159 00b3 0C        		.uleb128 0xc
+ 1160 00b4 01        		.uleb128 0x1
+ 1161 00b5 13        		.uleb128 0x13
+ 1162 00b6 00        		.byte	0
+ 1163 00b7 00        		.byte	0
+ 1164 00b8 0E        		.uleb128 0xe
+ 1165 00b9 05        		.uleb128 0x5
+ 1166 00ba 00        		.byte	0
+ 1167 00bb 03        		.uleb128 0x3
+ 1168 00bc 0E        		.uleb128 0xe
+ 1169 00bd 3A        		.uleb128 0x3a
+ 1170 00be 0B        		.uleb128 0xb
+ 1171 00bf 3B        		.uleb128 0x3b
+ 1172 00c0 0B        		.uleb128 0xb
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 32
+
+
+ 1173 00c1 49        		.uleb128 0x49
+ 1174 00c2 13        		.uleb128 0x13
+ 1175 00c3 02        		.uleb128 0x2
+ 1176 00c4 06        		.uleb128 0x6
+ 1177 00c5 00        		.byte	0
+ 1178 00c6 00        		.byte	0
+ 1179 00c7 0F        		.uleb128 0xf
+ 1180 00c8 34        		.uleb128 0x34
+ 1181 00c9 00        		.byte	0
+ 1182 00ca 03        		.uleb128 0x3
+ 1183 00cb 08        		.uleb128 0x8
+ 1184 00cc 3A        		.uleb128 0x3a
+ 1185 00cd 0B        		.uleb128 0xb
+ 1186 00ce 3B        		.uleb128 0x3b
+ 1187 00cf 0B        		.uleb128 0xb
+ 1188 00d0 49        		.uleb128 0x49
+ 1189 00d1 13        		.uleb128 0x13
+ 1190 00d2 02        		.uleb128 0x2
+ 1191 00d3 06        		.uleb128 0x6
+ 1192 00d4 00        		.byte	0
+ 1193 00d5 00        		.byte	0
+ 1194 00d6 10        		.uleb128 0x10
+ 1195 00d7 1D        		.uleb128 0x1d
+ 1196 00d8 01        		.byte	0x1
+ 1197 00d9 31        		.uleb128 0x31
+ 1198 00da 13        		.uleb128 0x13
+ 1199 00db 11        		.uleb128 0x11
+ 1200 00dc 01        		.uleb128 0x1
+ 1201 00dd 12        		.uleb128 0x12
+ 1202 00de 01        		.uleb128 0x1
+ 1203 00df 58        		.uleb128 0x58
+ 1204 00e0 0B        		.uleb128 0xb
+ 1205 00e1 59        		.uleb128 0x59
+ 1206 00e2 0B        		.uleb128 0xb
+ 1207 00e3 01        		.uleb128 0x1
+ 1208 00e4 13        		.uleb128 0x13
+ 1209 00e5 00        		.byte	0
+ 1210 00e6 00        		.byte	0
+ 1211 00e7 11        		.uleb128 0x11
+ 1212 00e8 1D        		.uleb128 0x1d
+ 1213 00e9 01        		.byte	0x1
+ 1214 00ea 31        		.uleb128 0x31
+ 1215 00eb 13        		.uleb128 0x13
+ 1216 00ec 11        		.uleb128 0x11
+ 1217 00ed 01        		.uleb128 0x1
+ 1218 00ee 12        		.uleb128 0x12
+ 1219 00ef 01        		.uleb128 0x1
+ 1220 00f0 58        		.uleb128 0x58
+ 1221 00f1 0B        		.uleb128 0xb
+ 1222 00f2 59        		.uleb128 0x59
+ 1223 00f3 0B        		.uleb128 0xb
+ 1224 00f4 00        		.byte	0
+ 1225 00f5 00        		.byte	0
+ 1226 00f6 12        		.uleb128 0x12
+ 1227 00f7 05        		.uleb128 0x5
+ 1228 00f8 00        		.byte	0
+ 1229 00f9 31        		.uleb128 0x31
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 33
+
+
+ 1230 00fa 13        		.uleb128 0x13
+ 1231 00fb 1C        		.uleb128 0x1c
+ 1232 00fc 0A        		.uleb128 0xa
+ 1233 00fd 00        		.byte	0
+ 1234 00fe 00        		.byte	0
+ 1235 00ff 13        		.uleb128 0x13
+ 1236 0100 0B        		.uleb128 0xb
+ 1237 0101 01        		.byte	0x1
+ 1238 0102 11        		.uleb128 0x11
+ 1239 0103 01        		.uleb128 0x1
+ 1240 0104 12        		.uleb128 0x12
+ 1241 0105 01        		.uleb128 0x1
+ 1242 0106 00        		.byte	0
+ 1243 0107 00        		.byte	0
+ 1244 0108 14        		.uleb128 0x14
+ 1245 0109 34        		.uleb128 0x34
+ 1246 010a 00        		.byte	0
+ 1247 010b 31        		.uleb128 0x31
+ 1248 010c 13        		.uleb128 0x13
+ 1249 010d 1C        		.uleb128 0x1c
+ 1250 010e 0A        		.uleb128 0xa
+ 1251 010f 00        		.byte	0
+ 1252 0110 00        		.byte	0
+ 1253 0111 15        		.uleb128 0x15
+ 1254 0112 34        		.uleb128 0x34
+ 1255 0113 00        		.byte	0
+ 1256 0114 31        		.uleb128 0x31
+ 1257 0115 13        		.uleb128 0x13
+ 1258 0116 1C        		.uleb128 0x1c
+ 1259 0117 05        		.uleb128 0x5
+ 1260 0118 00        		.byte	0
+ 1261 0119 00        		.byte	0
+ 1262 011a 16        		.uleb128 0x16
+ 1263 011b 1D        		.uleb128 0x1d
+ 1264 011c 01        		.byte	0x1
+ 1265 011d 31        		.uleb128 0x31
+ 1266 011e 13        		.uleb128 0x13
+ 1267 011f 11        		.uleb128 0x11
+ 1268 0120 01        		.uleb128 0x1
+ 1269 0121 12        		.uleb128 0x12
+ 1270 0122 01        		.uleb128 0x1
+ 1271 0123 58        		.uleb128 0x58
+ 1272 0124 0B        		.uleb128 0xb
+ 1273 0125 59        		.uleb128 0x59
+ 1274 0126 05        		.uleb128 0x5
+ 1275 0127 01        		.uleb128 0x1
+ 1276 0128 13        		.uleb128 0x13
+ 1277 0129 00        		.byte	0
+ 1278 012a 00        		.byte	0
+ 1279 012b 17        		.uleb128 0x17
+ 1280 012c 1D        		.uleb128 0x1d
+ 1281 012d 01        		.byte	0x1
+ 1282 012e 31        		.uleb128 0x31
+ 1283 012f 13        		.uleb128 0x13
+ 1284 0130 11        		.uleb128 0x11
+ 1285 0131 01        		.uleb128 0x1
+ 1286 0132 12        		.uleb128 0x12
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 34
+
+
+ 1287 0133 01        		.uleb128 0x1
+ 1288 0134 58        		.uleb128 0x58
+ 1289 0135 0B        		.uleb128 0xb
+ 1290 0136 59        		.uleb128 0x59
+ 1291 0137 05        		.uleb128 0x5
+ 1292 0138 00        		.byte	0
+ 1293 0139 00        		.byte	0
+ 1294 013a 18        		.uleb128 0x18
+ 1295 013b 2E        		.uleb128 0x2e
+ 1296 013c 01        		.byte	0x1
+ 1297 013d 31        		.uleb128 0x31
+ 1298 013e 13        		.uleb128 0x13
+ 1299 013f 11        		.uleb128 0x11
+ 1300 0140 01        		.uleb128 0x1
+ 1301 0141 12        		.uleb128 0x12
+ 1302 0142 01        		.uleb128 0x1
+ 1303 0143 40        		.uleb128 0x40
+ 1304 0144 0A        		.uleb128 0xa
+ 1305 0145 9742      		.uleb128 0x2117
+ 1306 0147 0C        		.uleb128 0xc
+ 1307 0148 01        		.uleb128 0x1
+ 1308 0149 13        		.uleb128 0x13
+ 1309 014a 00        		.byte	0
+ 1310 014b 00        		.byte	0
+ 1311 014c 19        		.uleb128 0x19
+ 1312 014d 2E        		.uleb128 0x2e
+ 1313 014e 01        		.byte	0x1
+ 1314 014f 03        		.uleb128 0x3
+ 1315 0150 0E        		.uleb128 0xe
+ 1316 0151 3A        		.uleb128 0x3a
+ 1317 0152 0B        		.uleb128 0xb
+ 1318 0153 3B        		.uleb128 0x3b
+ 1319 0154 0B        		.uleb128 0xb
+ 1320 0155 27        		.uleb128 0x27
+ 1321 0156 0C        		.uleb128 0xc
+ 1322 0157 49        		.uleb128 0x49
+ 1323 0158 13        		.uleb128 0x13
+ 1324 0159 20        		.uleb128 0x20
+ 1325 015a 0B        		.uleb128 0xb
+ 1326 015b 01        		.uleb128 0x1
+ 1327 015c 13        		.uleb128 0x13
+ 1328 015d 00        		.byte	0
+ 1329 015e 00        		.byte	0
+ 1330 015f 1A        		.uleb128 0x1a
+ 1331 0160 34        		.uleb128 0x34
+ 1332 0161 00        		.byte	0
+ 1333 0162 03        		.uleb128 0x3
+ 1334 0163 08        		.uleb128 0x8
+ 1335 0164 3A        		.uleb128 0x3a
+ 1336 0165 0B        		.uleb128 0xb
+ 1337 0166 3B        		.uleb128 0x3b
+ 1338 0167 0B        		.uleb128 0xb
+ 1339 0168 49        		.uleb128 0x49
+ 1340 0169 13        		.uleb128 0x13
+ 1341 016a 00        		.byte	0
+ 1342 016b 00        		.byte	0
+ 1343 016c 1B        		.uleb128 0x1b
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 35
+
+
+ 1344 016d 0B        		.uleb128 0xb
+ 1345 016e 01        		.byte	0x1
+ 1346 016f 00        		.byte	0
+ 1347 0170 00        		.byte	0
+ 1348 0171 1C        		.uleb128 0x1c
+ 1349 0172 2E        		.uleb128 0x2e
+ 1350 0173 00        		.byte	0
+ 1351 0174 03        		.uleb128 0x3
+ 1352 0175 0E        		.uleb128 0xe
+ 1353 0176 3A        		.uleb128 0x3a
+ 1354 0177 0B        		.uleb128 0xb
+ 1355 0178 3B        		.uleb128 0x3b
+ 1356 0179 0B        		.uleb128 0xb
+ 1357 017a 27        		.uleb128 0x27
+ 1358 017b 0C        		.uleb128 0xc
+ 1359 017c 20        		.uleb128 0x20
+ 1360 017d 0B        		.uleb128 0xb
+ 1361 017e 00        		.byte	0
+ 1362 017f 00        		.byte	0
+ 1363 0180 1D        		.uleb128 0x1d
+ 1364 0181 2E        		.uleb128 0x2e
+ 1365 0182 01        		.byte	0x1
+ 1366 0183 3F        		.uleb128 0x3f
+ 1367 0184 0C        		.uleb128 0xc
+ 1368 0185 03        		.uleb128 0x3
+ 1369 0186 0E        		.uleb128 0xe
+ 1370 0187 3A        		.uleb128 0x3a
+ 1371 0188 0B        		.uleb128 0xb
+ 1372 0189 3B        		.uleb128 0x3b
+ 1373 018a 05        		.uleb128 0x5
+ 1374 018b 27        		.uleb128 0x27
+ 1375 018c 0C        		.uleb128 0xc
+ 1376 018d 49        		.uleb128 0x49
+ 1377 018e 13        		.uleb128 0x13
+ 1378 018f 11        		.uleb128 0x11
+ 1379 0190 01        		.uleb128 0x1
+ 1380 0191 12        		.uleb128 0x12
+ 1381 0192 01        		.uleb128 0x1
+ 1382 0193 40        		.uleb128 0x40
+ 1383 0194 0A        		.uleb128 0xa
+ 1384 0195 9742      		.uleb128 0x2117
+ 1385 0197 0C        		.uleb128 0xc
+ 1386 0198 01        		.uleb128 0x1
+ 1387 0199 13        		.uleb128 0x13
+ 1388 019a 00        		.byte	0
+ 1389 019b 00        		.byte	0
+ 1390 019c 1E        		.uleb128 0x1e
+ 1391 019d 34        		.uleb128 0x34
+ 1392 019e 00        		.byte	0
+ 1393 019f 03        		.uleb128 0x3
+ 1394 01a0 08        		.uleb128 0x8
+ 1395 01a1 3A        		.uleb128 0x3a
+ 1396 01a2 0B        		.uleb128 0xb
+ 1397 01a3 3B        		.uleb128 0x3b
+ 1398 01a4 05        		.uleb128 0x5
+ 1399 01a5 49        		.uleb128 0x49
+ 1400 01a6 13        		.uleb128 0x13
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 36
+
+
+ 1401 01a7 02        		.uleb128 0x2
+ 1402 01a8 0A        		.uleb128 0xa
+ 1403 01a9 00        		.byte	0
+ 1404 01aa 00        		.byte	0
+ 1405 01ab 1F        		.uleb128 0x1f
+ 1406 01ac 34        		.uleb128 0x34
+ 1407 01ad 00        		.byte	0
+ 1408 01ae 03        		.uleb128 0x3
+ 1409 01af 08        		.uleb128 0x8
+ 1410 01b0 3A        		.uleb128 0x3a
+ 1411 01b1 0B        		.uleb128 0xb
+ 1412 01b2 3B        		.uleb128 0x3b
+ 1413 01b3 05        		.uleb128 0x5
+ 1414 01b4 49        		.uleb128 0x49
+ 1415 01b5 13        		.uleb128 0x13
+ 1416 01b6 00        		.byte	0
+ 1417 01b7 00        		.byte	0
+ 1418 01b8 20        		.uleb128 0x20
+ 1419 01b9 34        		.uleb128 0x34
+ 1420 01ba 00        		.byte	0
+ 1421 01bb 31        		.uleb128 0x31
+ 1422 01bc 13        		.uleb128 0x13
+ 1423 01bd 02        		.uleb128 0x2
+ 1424 01be 06        		.uleb128 0x6
+ 1425 01bf 00        		.byte	0
+ 1426 01c0 00        		.byte	0
+ 1427 01c1 21        		.uleb128 0x21
+ 1428 01c2 34        		.uleb128 0x34
+ 1429 01c3 00        		.byte	0
+ 1430 01c4 31        		.uleb128 0x31
+ 1431 01c5 13        		.uleb128 0x13
+ 1432 01c6 00        		.byte	0
+ 1433 01c7 00        		.byte	0
+ 1434 01c8 22        		.uleb128 0x22
+ 1435 01c9 34        		.uleb128 0x34
+ 1436 01ca 00        		.byte	0
+ 1437 01cb 31        		.uleb128 0x31
+ 1438 01cc 13        		.uleb128 0x13
+ 1439 01cd 1C        		.uleb128 0x1c
+ 1440 01ce 0B        		.uleb128 0xb
+ 1441 01cf 00        		.byte	0
+ 1442 01d0 00        		.byte	0
+ 1443 01d1 23        		.uleb128 0x23
+ 1444 01d2 05        		.uleb128 0x5
+ 1445 01d3 00        		.byte	0
+ 1446 01d4 31        		.uleb128 0x31
+ 1447 01d5 13        		.uleb128 0x13
+ 1448 01d6 02        		.uleb128 0x2
+ 1449 01d7 06        		.uleb128 0x6
+ 1450 01d8 00        		.byte	0
+ 1451 01d9 00        		.byte	0
+ 1452 01da 24        		.uleb128 0x24
+ 1453 01db 8982 01   		.uleb128 0x4109
+ 1454 01de 01        		.byte	0x1
+ 1455 01df 11        		.uleb128 0x11
+ 1456 01e0 01        		.uleb128 0x1
+ 1457 01e1 31        		.uleb128 0x31
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 37
+
+
+ 1458 01e2 13        		.uleb128 0x13
+ 1459 01e3 01        		.uleb128 0x1
+ 1460 01e4 13        		.uleb128 0x13
+ 1461 01e5 00        		.byte	0
+ 1462 01e6 00        		.byte	0
+ 1463 01e7 25        		.uleb128 0x25
+ 1464 01e8 8A82 01   		.uleb128 0x410a
+ 1465 01eb 00        		.byte	0
+ 1466 01ec 02        		.uleb128 0x2
+ 1467 01ed 0A        		.uleb128 0xa
+ 1468 01ee 9142      		.uleb128 0x2111
+ 1469 01f0 0A        		.uleb128 0xa
+ 1470 01f1 00        		.byte	0
+ 1471 01f2 00        		.byte	0
+ 1472 01f3 26        		.uleb128 0x26
+ 1473 01f4 8982 01   		.uleb128 0x4109
+ 1474 01f7 01        		.byte	0x1
+ 1475 01f8 11        		.uleb128 0x11
+ 1476 01f9 01        		.uleb128 0x1
+ 1477 01fa 31        		.uleb128 0x31
+ 1478 01fb 13        		.uleb128 0x13
+ 1479 01fc 00        		.byte	0
+ 1480 01fd 00        		.byte	0
+ 1481 01fe 27        		.uleb128 0x27
+ 1482 01ff 34        		.uleb128 0x34
+ 1483 0200 00        		.byte	0
+ 1484 0201 03        		.uleb128 0x3
+ 1485 0202 0E        		.uleb128 0xe
+ 1486 0203 3A        		.uleb128 0x3a
+ 1487 0204 0B        		.uleb128 0xb
+ 1488 0205 3B        		.uleb128 0x3b
+ 1489 0206 0B        		.uleb128 0xb
+ 1490 0207 49        		.uleb128 0x49
+ 1491 0208 13        		.uleb128 0x13
+ 1492 0209 1C        		.uleb128 0x1c
+ 1493 020a 0B        		.uleb128 0xb
+ 1494 020b 00        		.byte	0
+ 1495 020c 00        		.byte	0
+ 1496 020d 28        		.uleb128 0x28
+ 1497 020e 26        		.uleb128 0x26
+ 1498 020f 00        		.byte	0
+ 1499 0210 49        		.uleb128 0x49
+ 1500 0211 13        		.uleb128 0x13
+ 1501 0212 00        		.byte	0
+ 1502 0213 00        		.byte	0
+ 1503 0214 29        		.uleb128 0x29
+ 1504 0215 0F        		.uleb128 0xf
+ 1505 0216 00        		.byte	0
+ 1506 0217 0B        		.uleb128 0xb
+ 1507 0218 0B        		.uleb128 0xb
+ 1508 0219 49        		.uleb128 0x49
+ 1509 021a 13        		.uleb128 0x13
+ 1510 021b 00        		.byte	0
+ 1511 021c 00        		.byte	0
+ 1512 021d 2A        		.uleb128 0x2a
+ 1513 021e 34        		.uleb128 0x34
+ 1514 021f 00        		.byte	0
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 38
+
+
+ 1515 0220 03        		.uleb128 0x3
+ 1516 0221 0E        		.uleb128 0xe
+ 1517 0222 3A        		.uleb128 0x3a
+ 1518 0223 0B        		.uleb128 0xb
+ 1519 0224 3B        		.uleb128 0x3b
+ 1520 0225 0B        		.uleb128 0xb
+ 1521 0226 49        		.uleb128 0x49
+ 1522 0227 13        		.uleb128 0x13
+ 1523 0228 3F        		.uleb128 0x3f
+ 1524 0229 0C        		.uleb128 0xc
+ 1525 022a 02        		.uleb128 0x2
+ 1526 022b 0A        		.uleb128 0xa
+ 1527 022c 00        		.byte	0
+ 1528 022d 00        		.byte	0
+ 1529 022e 00        		.byte	0
+ 1530               		.section	.debug_loc,"",@progbits
+ 1531               	.Ldebug_loc0:
+ 1532               	.LLST0:
+ 1533 0000 0000 0000 		.long	.LVL0
+ 1534 0004 0000 0000 		.long	.LVL4
+ 1535 0008 0100      		.word	0x1
+ 1536 000a 68        		.byte	0x68
+ 1537 000b 0000 0000 		.long	.LVL4
+ 1538 000f 0000 0000 		.long	.LVL8
+ 1539 0013 0100      		.word	0x1
+ 1540 0015 68        		.byte	0x68
+ 1541 0016 0000 0000 		.long	0
+ 1542 001a 0000 0000 		.long	0
+ 1543               	.LLST1:
+ 1544 001e 0000 0000 		.long	.LVL2
+ 1545 0022 0000 0000 		.long	.LVL3
+ 1546 0026 0200      		.word	0x2
+ 1547 0028 30        		.byte	0x30
+ 1548 0029 9F        		.byte	0x9f
+ 1549 002a 0000 0000 		.long	.LVL3
+ 1550 002e 0000 0000 		.long	.LVL5
+ 1551 0032 0500      		.word	0x5
+ 1552 0034 38        		.byte	0x38
+ 1553 0035 89        		.byte	0x89
+ 1554 0036 00        		.sleb128 0
+ 1555 0037 1C        		.byte	0x1c
+ 1556 0038 9F        		.byte	0x9f
+ 1557 0039 0000 0000 		.long	.LVL5
+ 1558 003d 0000 0000 		.long	.LVL6
+ 1559 0041 0500      		.word	0x5
+ 1560 0043 39        		.byte	0x39
+ 1561 0044 89        		.byte	0x89
+ 1562 0045 00        		.sleb128 0
+ 1563 0046 1C        		.byte	0x1c
+ 1564 0047 9F        		.byte	0x9f
+ 1565 0048 0000 0000 		.long	.LVL6
+ 1566 004c 0000 0000 		.long	.LFE15
+ 1567 0050 0500      		.word	0x5
+ 1568 0052 38        		.byte	0x38
+ 1569 0053 89        		.byte	0x89
+ 1570 0054 00        		.sleb128 0
+ 1571 0055 1C        		.byte	0x1c
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 39
+
+
+ 1572 0056 9F        		.byte	0x9f
+ 1573 0057 0000 0000 		.long	0
+ 1574 005b 0000 0000 		.long	0
+ 1575               	.LLST2:
+ 1576 005f 0000 0000 		.long	.LVL10
+ 1577 0063 0000 0000 		.long	.LVL11
+ 1578 0067 0200      		.word	0x2
+ 1579 0069 30        		.byte	0x30
+ 1580 006a 9F        		.byte	0x9f
+ 1581 006b 0000 0000 		.long	.LVL11
+ 1582 006f 0000 0000 		.long	.LVL26-1
+ 1583 0073 0100      		.word	0x1
+ 1584 0075 62        		.byte	0x62
+ 1585 0076 0000 0000 		.long	.LVL29
+ 1586 007a 0000 0000 		.long	.LVL33
+ 1587 007e 0100      		.word	0x1
+ 1588 0080 62        		.byte	0x62
+ 1589 0081 0000 0000 		.long	0
+ 1590 0085 0000 0000 		.long	0
+ 1591               	.LLST3:
+ 1592 0089 0000 0000 		.long	.LVL10
+ 1593 008d 0000 0000 		.long	.LVL11
+ 1594 0091 0200      		.word	0x2
+ 1595 0093 30        		.byte	0x30
+ 1596 0094 9F        		.byte	0x9f
+ 1597 0095 0000 0000 		.long	.LVL11
+ 1598 0099 0000 0000 		.long	.LVL23
+ 1599 009d 0400      		.word	0x4
+ 1600 009f 8E        		.byte	0x8e
+ 1601 00a0 A07F      		.sleb128 -96
+ 1602 00a2 9F        		.byte	0x9f
+ 1603 00a3 0000 0000 		.long	.LVL23
+ 1604 00a7 0000 0000 		.long	.LVL24
+ 1605 00ab 0400      		.word	0x4
+ 1606 00ad 8E        		.byte	0x8e
+ 1607 00ae 9F7F      		.sleb128 -97
+ 1608 00b0 9F        		.byte	0x9f
+ 1609 00b1 0000 0000 		.long	.LVL24
+ 1610 00b5 0000 0000 		.long	.LVL26-1
+ 1611 00b9 0400      		.word	0x4
+ 1612 00bb 8E        		.byte	0x8e
+ 1613 00bc A07F      		.sleb128 -96
+ 1614 00be 9F        		.byte	0x9f
+ 1615 00bf 0000 0000 		.long	.LVL29
+ 1616 00c3 0000 0000 		.long	.LVL30
+ 1617 00c7 0400      		.word	0x4
+ 1618 00c9 8E        		.byte	0x8e
+ 1619 00ca A07F      		.sleb128 -96
+ 1620 00cc 9F        		.byte	0x9f
+ 1621 00cd 0000 0000 		.long	.LVL32
+ 1622 00d1 0000 0000 		.long	.LVL33
+ 1623 00d5 0400      		.word	0x4
+ 1624 00d7 8E        		.byte	0x8e
+ 1625 00d8 A07F      		.sleb128 -96
+ 1626 00da 9F        		.byte	0x9f
+ 1627 00db 0000 0000 		.long	0
+ 1628 00df 0000 0000 		.long	0
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 40
+
+
+ 1629               	.LLST4:
+ 1630 00e3 0000 0000 		.long	.LVL11
+ 1631 00e7 0000 0000 		.long	.LVL12
+ 1632 00eb 0200      		.word	0x2
+ 1633 00ed 30        		.byte	0x30
+ 1634 00ee 9F        		.byte	0x9f
+ 1635 00ef 0000 0000 		.long	.LVL12
+ 1636 00f3 0000 0000 		.long	.LVL18
+ 1637 00f7 0100      		.word	0x1
+ 1638 00f9 63        		.byte	0x63
+ 1639 00fa 0000 0000 		.long	0
+ 1640 00fe 0000 0000 		.long	0
+ 1641               	.LLST5:
+ 1642 0102 0000 0000 		.long	.LVL11
+ 1643 0106 0000 0000 		.long	.LVL12
+ 1644 010a 0600      		.word	0x6
+ 1645 010c 0C        		.byte	0xc
+ 1646 010d 0035 0C00 		.long	0xc3500
+ 1647 0111 9F        		.byte	0x9f
+ 1648 0112 0000 0000 		.long	.LVL12
+ 1649 0116 0000 0000 		.long	.LVL13
+ 1650 011a 0C00      		.word	0xc
+ 1651 011c 68        		.byte	0x68
+ 1652 011d 93        		.byte	0x93
+ 1653 011e 01        		.uleb128 0x1
+ 1654 011f 69        		.byte	0x69
+ 1655 0120 93        		.byte	0x93
+ 1656 0121 01        		.uleb128 0x1
+ 1657 0122 6A        		.byte	0x6a
+ 1658 0123 93        		.byte	0x93
+ 1659 0124 01        		.uleb128 0x1
+ 1660 0125 6B        		.byte	0x6b
+ 1661 0126 93        		.byte	0x93
+ 1662 0127 01        		.uleb128 0x1
+ 1663 0128 0000 0000 		.long	.LVL13
+ 1664 012c 0000 0000 		.long	.LVL14
+ 1665 0130 0300      		.word	0x3
+ 1666 0132 88        		.byte	0x88
+ 1667 0133 7F        		.sleb128 -1
+ 1668 0134 9F        		.byte	0x9f
+ 1669 0135 0000 0000 		.long	.LVL14
+ 1670 0139 0000 0000 		.long	.LVL15
+ 1671 013d 0C00      		.word	0xc
+ 1672 013f 68        		.byte	0x68
+ 1673 0140 93        		.byte	0x93
+ 1674 0141 01        		.uleb128 0x1
+ 1675 0142 69        		.byte	0x69
+ 1676 0143 93        		.byte	0x93
+ 1677 0144 01        		.uleb128 0x1
+ 1678 0145 6A        		.byte	0x6a
+ 1679 0146 93        		.byte	0x93
+ 1680 0147 01        		.uleb128 0x1
+ 1681 0148 6B        		.byte	0x6b
+ 1682 0149 93        		.byte	0x93
+ 1683 014a 01        		.uleb128 0x1
+ 1684 014b 0000 0000 		.long	.LVL15
+ 1685 014f 0000 0000 		.long	.LVL16
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 41
+
+
+ 1686 0153 0300      		.word	0x3
+ 1687 0155 88        		.byte	0x88
+ 1688 0156 7F        		.sleb128 -1
+ 1689 0157 9F        		.byte	0x9f
+ 1690 0158 0000 0000 		.long	.LVL17
+ 1691 015c 0000 0000 		.long	.LVL19
+ 1692 0160 0C00      		.word	0xc
+ 1693 0162 68        		.byte	0x68
+ 1694 0163 93        		.byte	0x93
+ 1695 0164 01        		.uleb128 0x1
+ 1696 0165 69        		.byte	0x69
+ 1697 0166 93        		.byte	0x93
+ 1698 0167 01        		.uleb128 0x1
+ 1699 0168 6A        		.byte	0x6a
+ 1700 0169 93        		.byte	0x93
+ 1701 016a 01        		.uleb128 0x1
+ 1702 016b 6B        		.byte	0x6b
+ 1703 016c 93        		.byte	0x93
+ 1704 016d 01        		.uleb128 0x1
+ 1705 016e 0000 0000 		.long	0
+ 1706 0172 0000 0000 		.long	0
+ 1707               	.LLST6:
+ 1708 0176 0000 0000 		.long	.LVL18
+ 1709 017a 0000 0000 		.long	.LVL19
+ 1710 017e 0200      		.word	0x2
+ 1711 0180 30        		.byte	0x30
+ 1712 0181 9F        		.byte	0x9f
+ 1713 0182 0000 0000 		.long	.LVL19
+ 1714 0186 0000 0000 		.long	.LVL25
+ 1715 018a 0100      		.word	0x1
+ 1716 018c 68        		.byte	0x68
+ 1717 018d 0000 0000 		.long	.LVL25
+ 1718 0191 0000 0000 		.long	.LVL26-1
+ 1719 0195 0200      		.word	0x2
+ 1720 0197 8E        		.byte	0x8e
+ 1721 0198 7F        		.sleb128 -1
+ 1722 0199 0000 0000 		.long	.LVL29
+ 1723 019d 0000 0000 		.long	.LVL30
+ 1724 01a1 0200      		.word	0x2
+ 1725 01a3 8E        		.byte	0x8e
+ 1726 01a4 7F        		.sleb128 -1
+ 1727 01a5 0000 0000 		.long	.LVL32
+ 1728 01a9 0000 0000 		.long	.LVL33
+ 1729 01ad 0200      		.word	0x2
+ 1730 01af 8E        		.byte	0x8e
+ 1731 01b0 7F        		.sleb128 -1
+ 1732 01b1 0000 0000 		.long	0
+ 1733 01b5 0000 0000 		.long	0
+ 1734               	.LLST7:
+ 1735 01b9 0000 0000 		.long	.LVL18
+ 1736 01bd 0000 0000 		.long	.LVL19
+ 1737 01c1 0200      		.word	0x2
+ 1738 01c3 30        		.byte	0x30
+ 1739 01c4 9F        		.byte	0x9f
+ 1740 01c5 0000 0000 		.long	.LVL19
+ 1741 01c9 0000 0000 		.long	.LVL21
+ 1742 01cd 0500      		.word	0x5
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 42
+
+
+ 1743 01cf 38        		.byte	0x38
+ 1744 01d0 89        		.byte	0x89
+ 1745 01d1 00        		.sleb128 0
+ 1746 01d2 1C        		.byte	0x1c
+ 1747 01d3 9F        		.byte	0x9f
+ 1748 01d4 0000 0000 		.long	.LVL21
+ 1749 01d8 0000 0000 		.long	.LVL22
+ 1750 01dc 0500      		.word	0x5
+ 1751 01de 39        		.byte	0x39
+ 1752 01df 89        		.byte	0x89
+ 1753 01e0 00        		.sleb128 0
+ 1754 01e1 1C        		.byte	0x1c
+ 1755 01e2 9F        		.byte	0x9f
+ 1756 01e3 0000 0000 		.long	.LVL22
+ 1757 01e7 0000 0000 		.long	.LVL26-1
+ 1758 01eb 0500      		.word	0x5
+ 1759 01ed 38        		.byte	0x38
+ 1760 01ee 89        		.byte	0x89
+ 1761 01ef 00        		.sleb128 0
+ 1762 01f0 1C        		.byte	0x1c
+ 1763 01f1 9F        		.byte	0x9f
+ 1764 01f2 0000 0000 		.long	.LVL29
+ 1765 01f6 0000 0000 		.long	.LVL38
+ 1766 01fa 0500      		.word	0x5
+ 1767 01fc 38        		.byte	0x38
+ 1768 01fd 89        		.byte	0x89
+ 1769 01fe 00        		.sleb128 0
+ 1770 01ff 1C        		.byte	0x1c
+ 1771 0200 9F        		.byte	0x9f
+ 1772 0201 0000 0000 		.long	0
+ 1773 0205 0000 0000 		.long	0
+ 1774               	.LLST8:
+ 1775 0209 0000 0000 		.long	.LVL30
+ 1776 020d 0000 0000 		.long	.LVL32
+ 1777 0211 0600      		.word	0x6
+ 1778 0213 6E        		.byte	0x6e
+ 1779 0214 93        		.byte	0x93
+ 1780 0215 01        		.uleb128 0x1
+ 1781 0216 6F        		.byte	0x6f
+ 1782 0217 93        		.byte	0x93
+ 1783 0218 01        		.uleb128 0x1
+ 1784 0219 0000 0000 		.long	0
+ 1785 021d 0000 0000 		.long	0
+ 1786               	.LLST9:
+ 1787 0221 0000 0000 		.long	.LVL34
+ 1788 0225 0000 0000 		.long	.LVL36
+ 1789 0229 0600      		.word	0x6
+ 1790 022b 68        		.byte	0x68
+ 1791 022c 93        		.byte	0x93
+ 1792 022d 01        		.uleb128 0x1
+ 1793 022e 69        		.byte	0x69
+ 1794 022f 93        		.byte	0x93
+ 1795 0230 01        		.uleb128 0x1
+ 1796 0231 0000 0000 		.long	0
+ 1797 0235 0000 0000 		.long	0
+ 1798               		.section	.debug_aranges,"",@progbits
+ 1799 0000 2C00 0000 		.long	0x2c
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 43
+
+
+ 1800 0004 0200      		.word	0x2
+ 1801 0006 0000 0000 		.long	.Ldebug_info0
+ 1802 000a 04        		.byte	0x4
+ 1803 000b 00        		.byte	0
+ 1804 000c 0000      		.word	0
+ 1805 000e 0000      		.word	0
+ 1806 0010 0000 0000 		.long	.LFB15
+ 1807 0014 3000 0000 		.long	.LFE15-.LFB15
+ 1808 0018 0000 0000 		.long	.LFB11
+ 1809 001c 0A00 0000 		.long	.LFE11-.LFB11
+ 1810 0020 0000 0000 		.long	.LFB16
+ 1811 0024 E600 0000 		.long	.LFE16-.LFB16
+ 1812 0028 0000 0000 		.long	0
+ 1813 002c 0000 0000 		.long	0
+ 1814               		.section	.debug_ranges,"",@progbits
+ 1815               	.Ldebug_ranges0:
+ 1816 0000 0000 0000 		.long	.LFB15
+ 1817 0004 0000 0000 		.long	.LFE15
+ 1818 0008 0000 0000 		.long	.LFB11
+ 1819 000c 0000 0000 		.long	.LFE11
+ 1820 0010 0000 0000 		.long	.LFB16
+ 1821 0014 0000 0000 		.long	.LFE16
+ 1822 0018 0000 0000 		.long	0
+ 1823 001c 0000 0000 		.long	0
+ 1824               		.section	.debug_line,"",@progbits
+ 1825               	.Ldebug_line0:
+ 1826 0000 8801 0000 		.section	.debug_str,"MS",@progbits,1
+ 1826      0200 B800 
+ 1826      0000 0201 
+ 1826      FB0E 0A00 
+ 1826      0101 0101 
+ 1827               	.LASF25:
+ 1828 0000 474E 5520 		.string	"GNU C 4.9.2 -mn-flash=1 -mno-skip-bug -mmcu=avr25 -g2 -Os -ffunction-sections -fdata-sect
+ 1828      4320 342E 
+ 1828      392E 3220 
+ 1828      2D6D 6E2D 
+ 1828      666C 6173 
+ 1829               	.LASF32:
+ 1830 00b7 6375 7272 		.string	"currentAddress"
+ 1830      656E 7441 
+ 1830      6464 7265 
+ 1830      7373 00
+ 1831               	.LASF22:
+ 1832 00c6 5F5F 7573 		.string	"__us"
+ 1832      00
+ 1833               	.LASF15:
+ 1834 00cb 5F5F 6275 		.string	"__builtin_avr_delay_cycles"
+ 1834      696C 7469 
+ 1834      6E5F 6176 
+ 1834      725F 6465 
+ 1834      6C61 795F 
+ 1835               	.LASF18:
+ 1836 00e6 6461 7461 		.string	"data"
+ 1836      00
+ 1837               	.LASF29:
+ 1838 00eb 4765 7442 		.string	"GetBlock"
+ 1838      6C6F 636B 
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 44
+
+
+ 1838      00
+ 1839               	.LASF1:
+ 1840 00f4 756E 7369 		.string	"unsigned char"
+ 1840      676E 6564 
+ 1840      2063 6861 
+ 1840      7200 
+ 1841               	.LASF24:
+ 1842 0102 6275 6677 		.string	"bufword"
+ 1842      6F72 6400 
+ 1843               	.LASF7:
+ 1844 010a 6C6F 6E67 		.string	"long unsigned int"
+ 1844      2075 6E73 
+ 1844      6967 6E65 
+ 1844      6420 696E 
+ 1844      7400 
+ 1845               	.LASF14:
+ 1846 011c 646F 7562 		.string	"double"
+ 1846      6C65 00
+ 1847               	.LASF12:
+ 1848 0123 5F5F 746D 		.string	"__tmp"
+ 1848      7000 
+ 1849               	.LASF31:
+ 1850 0129 6D61 696E 		.string	"main"
+ 1850      00
+ 1851               	.LASF27:
+ 1852 012e 643A 5C41 		.string	"d:\\AVR\\Gluon\\Bootloader"
+ 1852      5652 5C47 
+ 1852      6C75 6F6E 
+ 1852      5C42 6F6F 
+ 1852      746C 6F61 
+ 1853               	.LASF11:
+ 1854 0146 7569 6E74 		.string	"uint16_union_t"
+ 1854      3136 5F75 
+ 1854      6E69 6F6E 
+ 1854      5F74 00
+ 1855               	.LASF4:
+ 1856 0155 756E 7369 		.string	"unsigned int"
+ 1856      676E 6564 
+ 1856      2069 6E74 
+ 1856      00
+ 1857               	.LASF19:
+ 1858 0162 5F64 656C 		.string	"_delay_us"
+ 1858      6179 5F75 
+ 1858      7300 
+ 1859               	.LASF9:
+ 1860 016c 6C6F 6E67 		.string	"long long unsigned int"
+ 1860      206C 6F6E 
+ 1860      6720 756E 
+ 1860      7369 676E 
+ 1860      6564 2069 
+ 1861               	.LASF2:
+ 1862 0183 7569 6E74 		.string	"uint8_t"
+ 1862      385F 7400 
+ 1863               	.LASF30:
+ 1864 018b 4465 6C61 		.string	"DelayBaudHalf"
+ 1864      7942 6175 
+ 1864      6448 616C 
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 45
+
+
+ 1864      6600 
+ 1865               	.LASF21:
+ 1866 0199 7772 6974 		.string	"writeWordToPageBuffer"
+ 1866      6557 6F72 
+ 1866      6454 6F50 
+ 1866      6167 6542 
+ 1866      7566 6665 
+ 1867               	.LASF10:
+ 1868 01af 7369 7A65 		.string	"sizetype"
+ 1868      7479 7065 
+ 1868      00
+ 1869               	.LASF8:
+ 1870 01b8 6C6F 6E67 		.string	"long long int"
+ 1870      206C 6F6E 
+ 1870      6720 696E 
+ 1870      7400 
+ 1871               	.LASF26:
+ 1872 01c6 6D61 696E 		.string	"main.c"
+ 1872      2E63 00
+ 1873               	.LASF13:
+ 1874 01cd 5F5F 7469 		.string	"__ticks_dc"
+ 1874      636B 735F 
+ 1874      6463 00
+ 1875               	.LASF23:
+ 1876 01d8 6275 6666 		.string	"buffer"
+ 1876      6572 00
+ 1877               	.LASF3:
+ 1878 01df 7569 6E74 		.string	"uint16_t"
+ 1878      3136 5F74 
+ 1878      00
+ 1879               	.LASF28:
+ 1880 01e8 5365 6E64 		.string	"SendByte"
+ 1880      4279 7465 
+ 1880      00
+ 1881               	.LASF6:
+ 1882 01f1 7569 6E74 		.string	"uint32_t"
+ 1882      3332 5F74 
+ 1882      00
+ 1883               	.LASF5:
+ 1884 01fa 6C6F 6E67 		.string	"long int"
+ 1884      2069 6E74 
+ 1884      00
+ 1885               	.LASF16:
+ 1886 0203 4465 6C61 		.string	"DelayBaud"
+ 1886      7942 6175 
+ 1886      6400 
+ 1887               	.LASF0:
+ 1888 020d 7369 676E 		.string	"signed char"
+ 1888      6564 2063 
+ 1888      6861 7200 
+ 1889               	.LASF17:
+ 1890 0219 6C61 7374 		.string	"last"
+ 1890      00
+ 1891               	.LASF20:
+ 1892 021e 6572 6173 		.string	"eraseApplication"
+ 1892      6541 7070 
+ 1892      6C69 6361 
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 46
+
+
+ 1892      7469 6F6E 
+ 1892      00
+ 1893               		.ident	"GCC: (AVR_8_bit_GNU_Toolchain_3.5.1_1671) 4.9.2"
+GAS LISTING C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s 			page 47
+
+
+DEFINED SYMBOLS
+                            *ABS*:00000000 main.c
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:2      *ABS*:0000003e __SP_H__
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:3      *ABS*:0000003d __SP_L__
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:4      *ABS*:0000003f __SREG__
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:5      *ABS*:00000000 __tmp_reg__
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:6      *ABS*:00000001 __zero_reg__
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:12     .text.SendByte:00000000 SendByte
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:92     .text.DelayBaud:00000000 DelayBaud
+C:\Users\tim\AppData\Local\Temp\ccYJTCG4.s:117    .text.startup.main:00000000 main
+
+UNDEFINED SYMBOLS
+__vectors
