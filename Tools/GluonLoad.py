@@ -21,7 +21,7 @@ def sendblock(command,payload):
 ser=serial.Serial('com6',57600,timeout=0.1)
 
 ih=IntelHex()
-ih.fromfile('Blinky.hex',format='hex')
+ih.fromfile('Blinky104.hex',format='hex')
 
 while True:
 	try:
@@ -93,6 +93,7 @@ while True:
 		else:
 			print("timeout")
 
+		# break
 		print("Programming...")
 
 		for addr in range(0, bootstart, 16):

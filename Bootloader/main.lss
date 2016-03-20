@@ -1,0 +1,363 @@
+
+main.bin:     file format elf32-avr
+
+
+Disassembly of section .text:
+
+00000200 <__bad_interrupt>:
+	.global	__bad_interrupt
+	.func	__vectors
+
+__bad_interrupt:	
+__vectors:
+	XJMP	__init
+ 200:	00 c0       	rjmp	.+0      	; 0x202 <__ctors_end>
+
+00000202 <__ctors_end>:
+	.set	__heap_end, 0
+
+	.section .init2,"ax",@progbits
+
+#if defined(__AVR_ATtiny104__) | defined(__AVR_ATtiny102__) | defined(__AVR_ATtiny10__) 
+	clr 	R17
+ 202:	11 27       	eor	r17, r17
+	# out		0x3e, r29
+#endif    
+	.section .init9,"ax",@progbits
+;  rcall main
+;  XJMP  __vectors-2
+	XJMP	main
+ 204:	18 c0       	rjmp	.+48     	; 0x236 <main>
+
+00000206 <SendByte>:
+
+static void SendByte(uint8_t data)
+{
+  uint8_t i;
+  
+   RPORT &=~_BV(TX);
+ 206:	17 98       	cbi	0x02, 7	; 2
+	#else
+		//round up by default
+		__ticks_dc = (uint32_t)(ceil(fabs(__tmp)));
+	#endif
+
+	__builtin_avr_delay_cycles(__ticks_dc);
+ 208:	4d e2       	ldi	r20, 0x2D	; 45
+ 20a:	4a 95       	dec	r20
+ 20c:	f1 f7       	brne	.-4      	; 0x20a <SendByte+0x4>
+ 20e:	00 00       	nop
+ 210:	48 e0       	ldi	r20, 0x08	; 8
+  DelayBaud();
+  
+  for (i=0; i<8; i++)
+  {
+    if (data&1)
+ 212:	80 ff       	sbrs	r24, 0
+ 214:	02 c0       	rjmp	.+4      	; 0x21a <SendByte+0x14>
+      RPORT |= _BV(TX);
+ 216:	17 9a       	sbi	0x02, 7	; 2
+ 218:	01 c0       	rjmp	.+2      	; 0x21c <SendByte+0x16>
+    else
+      RPORT &=~_BV(TX);
+ 21a:	17 98       	cbi	0x02, 7	; 2
+    data>>=1;
+ 21c:	86 95       	lsr	r24
+ 21e:	5d e2       	ldi	r21, 0x2D	; 45
+ 220:	5a 95       	dec	r21
+ 222:	f1 f7       	brne	.-4      	; 0x220 <SendByte+0x1a>
+ 224:	00 00       	nop
+ 226:	41 50       	subi	r20, 0x01	; 1
+  uint8_t i;
+  
+   RPORT &=~_BV(TX);
+  DelayBaud();
+  
+  for (i=0; i<8; i++)
+ 228:	a1 f7       	brne	.-24     	; 0x212 <SendByte+0xc>
+      RPORT &=~_BV(TX);
+    data>>=1;
+    DelayBaud();
+  }
+
+    RPORT |= _BV(TX);
+ 22a:	17 9a       	sbi	0x02, 7	; 2
+ 22c:	4d e2       	ldi	r20, 0x2D	; 45
+ 22e:	4a 95       	dec	r20
+ 230:	f1 f7       	brne	.-4      	; 0x22e <SendByte+0x28>
+ 232:	00 00       	nop
+ 234:	08 95       	ret
+
+00000236 <main>:
+  
+  if (bootLoaderStartCondition()) {
+  
+
+#if defined( __AVR_ATtiny104__) || defined( __AVR_ATtiny102__)
+  CCP=0xD8;   // configuration change protection, write signature
+ 236:	48 ed       	ldi	r20, 0xD8	; 216
+ 238:	4c bf       	out	0x3c, r20	; 60
+  CLKPSR=0;   // set cpu clock prescaler =1 (8Mhz) (attiny 102/104)
+ 23a:	16 bf       	out	0x36, r17	; 54
+#endif
+
+   RDDR  |= _BV(TX); 
+ 23c:	0f 9a       	sbi	0x01, 7	; 1
+    
+   currentAddress.w = 0;
+ 23e:	20 e0       	ldi	r18, 0x00	; 0
+ 240:	30 e0       	ldi	r19, 0x00	; 0
+
+    RPORT |= _BV(TX);
+  DelayBaud();
+}
+
+int main(void) {
+ 242:	e0 e4       	ldi	r30, 0x40	; 64
+ 244:	f0 e0       	ldi	r31, 0x00	; 0
+}
+
+
+static uint8_t GetBlock(void) 
+{
+  uint8_t sum=0,b,i=0;
+ 246:	50 e0       	ldi	r21, 0x00	; 0
+ 248:	40 e0       	ldi	r20, 0x00	; 0
+      // Detect next falling edge
+      uint8_t last=0;
+      uint32_t ctr=800000;
+
+      while (1) {
+        if (RPIN&_BV(RX)) {
+ 24a:	06 9b       	sbis	0x00, 6	; 0
+ 24c:	02 c0       	rjmp	.+4      	; 0x252 <main+0x1c>
+          last=1;
+ 24e:	41 e0       	ldi	r20, 0x01	; 1
+ 250:	fc cf       	rjmp	.-8      	; 0x24a <main+0x14>
+        } else {
+          if (last) 
+ 252:	44 23       	and	r20, r20
+ 254:	c9 f3       	breq	.-14     	; 0x248 <main+0x12>
+ 256:	45 e1       	ldi	r20, 0x15	; 21
+ 258:	4a 95       	dec	r20
+ 25a:	f1 f7       	brne	.-4      	; 0x258 <main+0x22>
+ 25c:	00 00       	nop
+ 25e:	68 e0       	ldi	r22, 0x08	; 8
+      // while (!(PINB&_BV(RX))); // Wait for hi
+      // while ( (PINB&_BV(RX))); // Wait for start bit
+
+      DelayBaudHalf();
+
+      uint8_t data=0;
+ 260:	40 e0       	ldi	r20, 0x00	; 0
+ 262:	7d e2       	ldi	r23, 0x2D	; 45
+ 264:	7a 95       	dec	r23
+ 266:	f1 f7       	brne	.-4      	; 0x264 <main+0x2e>
+ 268:	00 00       	nop
+
+      for (j=0; j<8; j++)
+      {
+        DelayBaud();
+        
+        data>>=1;
+ 26a:	46 95       	lsr	r20
+        if (RPIN&_BV(RX)) data|=0x80;       
+ 26c:	06 99       	sbic	0x00, 6	; 0
+ 26e:	40 68       	ori	r20, 0x80	; 128
+ 270:	61 50       	subi	r22, 0x01	; 1
+      DelayBaudHalf();
+
+      uint8_t data=0;
+      uint8_t j;
+
+      for (j=0; j<8; j++)
+ 272:	b9 f7       	brne	.-18     	; 0x262 <main+0x2c>
+        DelayBaud();
+        
+        data>>=1;
+        if (RPIN&_BV(RX)) data|=0x80;       
+      }       
+      buffer[i]=data;      
+ 274:	41 93       	st	Z+, r20
+      sum+=data;     
+ 276:	54 0f       	add	r21, r20
+    } while (++i<18);         
+ 278:	e2 35       	cpi	r30, 0x52	; 82
+ 27a:	f1 07       	cpc	r31, r17
+ 27c:	29 f7       	brne	.-54     	; 0x248 <main+0x12>
+
+    uint8_t sum,i;
+
+    sum=GetBlock();
+    
+    if (sum==0x59) {
+ 27e:	59 35       	cpi	r21, 0x59	; 89
+ 280:	09 f0       	breq	.+2      	; 0x284 <main+0x4e>
+ 282:	47 c0       	rjmp	.+142    	; 0x312 <main+0xdc>
+      switch(buffer[16+2-1]) 
+ 284:	41 a3       	lds	r20, 81
+ 286:	41 34       	cpi	r20, 0x41	; 65
+ 288:	61 f0       	breq	.+24     	; 0x2a2 <main+0x6c>
+ 28a:	42 34       	cpi	r20, 0x42	; 66
+ 28c:	d9 f0       	breq	.+54     	; 0x2c4 <main+0x8e>
+ 28e:	40 34       	cpi	r20, 0x40	; 64
+ 290:	09 f0       	breq	.+2      	; 0x294 <main+0x5e>
+ 292:	3d c0       	rjmp	.+122    	; 0x30e <main+0xd8>
+      {
+        case 0x40:  // configuration reply
+          SendByte(0x11);  // Version
+ 294:	81 e1       	ldi	r24, 0x11	; 17
+ 296:	b7 df       	rcall	.-146    	; 0x206 <SendByte>
+          SendByte(BOOTLOADER_ADDRESS&0xff);  // bootstart_low
+ 298:	80 e0       	ldi	r24, 0x00	; 0
+ 29a:	b5 df       	rcall	.-150    	; 0x206 <SendByte>
+          SendByte(BOOTLOADER_ADDRESS>>8);  // bootstart_high
+ 29c:	82 e0       	ldi	r24, 0x02	; 2
+ 29e:	b3 df       	rcall	.-154    	; 0x206 <SendByte>
+          break;
+ 2a0:	36 c0       	rjmp	.+108    	; 0x30e <main+0xd8>
+    uint8_t sum,i;
+
+    sum=GetBlock();
+    
+    if (sum==0x59) {
+      switch(buffer[16+2-1]) 
+ 2a2:	e0 e0       	ldi	r30, 0x00	; 0
+ 2a4:	f2 e4       	ldi	r31, 0x42	; 66
+
+static inline void eraseApplication(void) 
+{
+   uint8_t *ptr =(uint8_t*) (BOOTLOADER_ADDRESS | 0x4000);
+  while (ptr) {
+    ptr -= SPM_PAGESIZE;        
+ 2a6:	e0 58       	subi	r30, 0x80	; 128
+ 2a8:	f1 0b       	sbc	r31, r17
+
+    NVMCMD=0x18; // Erase Page  0x33
+ 2aa:	48 e1       	ldi	r20, 0x18	; 24
+ 2ac:	43 bf       	out	0x33, r20	; 51
+    CCP=0xE7; // Enter program mode
+ 2ae:	47 ee       	ldi	r20, 0xE7	; 231
+ 2b0:	4c bf       	out	0x3c, r20	; 60
+    *ptr=0;
+ 2b2:	10 83       	st	Z, r17
+    nop();  nop();
+ 2b4:	00 00       	nop
+ 2b6:	00 00       	nop
+#if defined(__AVR_ATtiny104__)||defined(__AVR_ATtiny10__)
+
+static inline void eraseApplication(void) 
+{
+   uint8_t *ptr =(uint8_t*) (BOOTLOADER_ADDRESS | 0x4000);
+  while (ptr) {
+ 2b8:	e1 17       	cp	r30, r17
+ 2ba:	f1 07       	cpc	r31, r17
+ 2bc:	a1 f7       	brne	.-24     	; 0x2a6 <main+0x70>
+    *ptr=0;
+    nop();  nop();
+  }
+ 
+  // Reset address to ensure the reset vector is written first.
+  currentAddress.w = 0;  
+ 2be:	20 e0       	ldi	r18, 0x00	; 0
+ 2c0:	30 e0       	ldi	r19, 0x00	; 0
+ 2c2:	25 c0       	rjmp	.+74     	; 0x30e <main+0xd8>
+    uint8_t sum,i;
+
+    sum=GetBlock();
+    
+    if (sum==0x59) {
+      switch(buffer[16+2-1]) 
+ 2c4:	e0 e4       	ldi	r30, 0x40	; 64
+ 2c6:	f0 e0       	ldi	r31, 0x00	; 0
+          eraseApplication();
+          break;
+
+        case 0x42: // transfer data
+          for (i=0; i<8; i++)
+            writeWordToPageBuffer(bufword[i]);
+ 2c8:	70 81       	ld	r23, Z
+ 2ca:	ef 5f       	subi	r30, 0xFF	; 255
+ 2cc:	ff 4f       	sbci	r31, 0xFF	; 255
+ 2ce:	40 81       	ld	r20, Z
+ 2d0:	e1 50       	subi	r30, 0x01	; 1
+ 2d2:	f0 40       	sbci	r31, 0x00	; 0
+ 2d4:	ee 5f       	subi	r30, 0xFE	; 254
+ 2d6:	ff 4f       	sbci	r31, 0xFF	; 255
+static void writeWordToPageBuffer(uint16_t data) 
+{
+
+#ifndef ENABLE_UNSAFE_OPTIMIZATIONS     
+  // rjmp
+  if (currentAddress.w == RESET_VECTOR_OFFSET * 2) {
+ 2d8:	a2 2f       	mov	r26, r18
+ 2da:	b3 2f       	mov	r27, r19
+ 2dc:	21 17       	cp	r18, r17
+ 2de:	31 07       	cpc	r19, r17
+ 2e0:	11 f4       	brne	.+4      	; 0x2e6 <main+0xb0>
+    data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
+ 2e2:	7f ef       	ldi	r23, 0xFF	; 255
+ 2e4:	40 ec       	ldi	r20, 0xC0	; 192
+  }
+#endif
+
+  uint8_t *ptr=(uint8_t*) (currentAddress.w | 0x4000);
+ 2e6:	b0 64       	ori	r27, 0x40	; 64
+  NVMCMD=0x1D; // Write code word  0x33
+ 2e8:	6d e1       	ldi	r22, 0x1D	; 29
+ 2ea:	63 bf       	out	0x33, r22	; 51
+  CCP=0xE7; // Enter program mode
+ 2ec:	57 ee       	ldi	r21, 0xE7	; 231
+ 2ee:	5c bf       	out	0x3c, r21	; 60
+  *ptr++=(uint8_t)data; 
+ 2f0:	7c 93       	st	X, r23
+  nop();  nop();  // these are indeed needed to prevent bad things from happening
+ 2f2:	00 00       	nop
+ 2f4:	00 00       	nop
+  NVMCMD=0x1D; // Write code word  0x33
+ 2f6:	63 bf       	out	0x33, r22	; 51
+  CCP=0xE7; // Enter program mode
+ 2f8:	5c bf       	out	0x3c, r21	; 60
+  *ptr++=(uint8_t)(data>>8); 
+ 2fa:	af 5f       	subi	r26, 0xFF	; 255
+ 2fc:	bf 4f       	sbci	r27, 0xFF	; 255
+ 2fe:	4c 93       	st	X, r20
+  nop();  nop();
+ 300:	00 00       	nop
+ 302:	00 00       	nop
+  currentAddress.w += 2;
+ 304:	2e 5f       	subi	r18, 0xFE	; 254
+ 306:	3f 4f       	sbci	r19, 0xFF	; 255
+        case 0x41: // erase flash
+          eraseApplication();
+          break;
+
+        case 0x42: // transfer data
+          for (i=0; i<8; i++)
+ 308:	e0 35       	cpi	r30, 0x50	; 80
+ 30a:	f1 07       	cpc	r31, r17
+ 30c:	e9 f6       	brne	.-70     	; 0x2c8 <main+0x92>
+            writeWordToPageBuffer(bufword[i]);
+        break;        
+      }
+      SendByte(0xAD);
+ 30e:	8d ea       	ldi	r24, 0xAD	; 173
+ 310:	7a df       	rcall	.-268    	; 0x206 <SendByte>
+    }
+
+    // if (currentAddress.w>=BOOTLOADER_ADDRESS) break;
+    
+    // } while(1);  
+    } while(currentAddress.w<BOOTLOADER_ADDRESS);  
+ 312:	21 17       	cp	r18, r17
+ 314:	42 e0       	ldi	r20, 0x02	; 2
+ 316:	34 07       	cpc	r19, r20
+ 318:	08 f4       	brcc	.+2      	; 0x31c <main+0xe6>
+ 31a:	93 cf       	rjmp	.-218    	; 0x242 <main+0xc>
+  }
+   
+  asm volatile ("rjmp __vectors - 2"); // jump to application reset vector at end of flash
+ 31c:	70 cf       	rjmp	.-288    	; 0x1fe <__stack+0x19f>
+  
+   for (;;); // Make sure function does not return to help compiler optimize
+ 31e:	ff cf       	rjmp	.-2      	; 0x31e <main+0xe8>

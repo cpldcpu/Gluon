@@ -19,6 +19,7 @@ CONFIG ?= t85_default
 #     make disablereset		# use external reset line for IO (CAUTION: this is not easy to enable again, see README) 
 
 CFLAGS =
+LDPATH =
 CONFIGPATH	  = configuration/$(CONFIG)
 include $(CONFIGPATH)/Makefile.inc
 
@@ -34,9 +35,15 @@ CFLAGS += -I. -g2 -Os # -Wall
 CFLAGS += -I$(CONFIGPATH) -mmcu=$(DEVICE) -DF_CPU=$(F_CPU) -DBOOTLOADER_ADDRESS=0x$(BOOTLOADER_ADDRESS) 
 CFLAGS += -nostartfiles -ffunction-sections -fdata-sections -fpack-struct -fno-inline-small-functions -fno-move-loop-invariants -fno-tree-scev-cprop
 
-LDFLAGS = -Wl,--relax,--section-start=.text=$(BOOTLOADER_ADDRESS) 
+# LDFLAGS = $(LDPATH) -Wl,--relax,--section-start=bootloader=$(BOOTLOADER_ADDRESS),--gc-sections
 
-# ,--gc-sections -B "C:\Program Files (x86)\Atmel\Studio\7.0\Packs\atmel\ATtiny_DFP\1.0.68\gcc\dev\attiny104" 
+LDFLAGS = $(LDPATH) -Wl,--relax,--section-start=.text=$(BOOTLOADER_ADDRESS),--gc-sections
+
+#-B $(CURDIR)"\configuration\t104_default"
+
+# -B "C:\Program Files (x86)\Atmel\Studio\7.0\Packs\atmel\ATtiny_DFP\1.0.68\gcc\dev\attiny104"
+
+#
 
 OBJECTS =  crt1.o main.o bootloadasm.o
 
@@ -57,7 +64,9 @@ all: main.hex
 	@$(CC) $(CFLAGS) -S $< -o $@
 
 flash:	all
+	@python translate.py
 	$(AVRDUDE) -U flash:w:main.hex:i -B 20
+	@rm -f main.hex main.bin main.c.lst main.map main.raw *.o usbdrv/*.o main.s usbdrv/oddebug.s usbdrv/usbdrv.s main.lss
 
 readflash:
 	$(AVRDUDE) -U flash:r:read.hex:i -B 20

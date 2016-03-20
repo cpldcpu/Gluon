@@ -1,16 +1,12 @@
 /* 
  * Project: Gluon-Bootload -  v2.3
  *
- * License: GNU GPL v2 (see License.txt)
+ * Licens7e: GNU GPL v2 (see License.txt)
  */
  
 #define MICRONUCLEUS_VERSION_MAJOR 2
 #define MICRONUCLEUS_VERSION_MINOR 3
 
-
-#define RX PA3
-#define TX PA4
-#define BAUD 57600
 
 
 #include <avr/io.h>
@@ -18,7 +14,7 @@
 #include <avr/wdt.h>
 #include <util/delay.h>
 
-#ifndef __AVR_ATtiny104__
+#if !(defined(__AVR_ATtiny104__)|defined(__AVR_ATtiny10__))
 #include <avr/boot.h>
 #endif
 
@@ -45,6 +41,11 @@
   #error "Do not set AUTO_EXIT_MS to below 1s to allow Micronucleus to function properly"
 #endif
 
+#if SPM_PAGESIZE>128
+ #error pagesizewtf
+#endif
+
+
 // Device configuration reply
 // Length: 6 bytes
 //   Byte 0:  Bootloader version. High and low nibble.
@@ -57,7 +58,8 @@
   } uint16_union_t;
 
 #ifdef __AVR_ATtiny104__
-uint16_union_t currentAddress; 
+// uint16_union_t currentAddress; 
+register uint16_union_t currentAddress  asm("r18");  // r4/r5 current progmem address, used for erasing and writing 
 #else
 register uint16_union_t currentAddress  asm("r4");  // r4/r5 current progmem address, used for erasing and writing 
 #endif
@@ -94,16 +96,54 @@ static uint8_t usbFunctionSetup(uint8_t data[8]);
 static inline void leaveBootloader(void);
 
 
-#ifdef __AVR_ATtiny104__
+#if defined(__AVR_ATtiny104__)||defined(__AVR_ATtiny10__)
 
 static inline void eraseApplication(void) 
 {
+   uint8_t *ptr =(uint8_t*) (BOOTLOADER_ADDRESS | 0x4000);
+  while (ptr) {
+    ptr -= SPM_PAGESIZE;        
 
+    NVMCMD=0x18; // Erase Page  0x33
+    CCP=0xE7; // Enter program mode
+    *ptr=0;
+    nop();  nop();
+  }
+ 
+  // Reset address to ensure the reset vector is written first.
+  currentAddress.w = 0;  
 }
 
 static void writeWordToPageBuffer(uint16_t data) 
 {
+
+#ifndef ENABLE_UNSAFE_OPTIMIZATIONS     
+  // rjmp
+  if (currentAddress.w == RESET_VECTOR_OFFSET * 2) {
+    data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
+  }
+#endif
+
+  uint8_t *ptr=(uint8_t*) (currentAddress.w | 0x4000);
+  NVMCMD=0x1D; // Write code word  0x33
+  CCP=0xE7; // Enter program mode
+  *ptr++=(uint8_t)data; 
+  nop();  nop();  // these are indeed needed to prevent bad things from happening
+  NVMCMD=0x1D; // Write code word  0x33
+  CCP=0xE7; // Enter program mode
+  *ptr++=(uint8_t)(data>>8); 
+  nop();  nop();
+  currentAddress.w += 2;
+
+
 }
+
+#define RPORT PORTA
+#define RDDR DDRA
+#define RPIN PINA
+#define RX PA6
+#define TX PA7
+#define BAUD 57600
 
 
 #else
@@ -124,6 +164,7 @@ static inline void eraseApplication(void) {
     __SPM_REG=(__BOOT_PAGE_ERASE|_BV(__SPM_ENABLE)|_BV(CTPB));
     spm(ptr);
   }
+ 
  
   // Reset address to ensure the reset vector is written first.
   currentAddress.w = 0;   
@@ -159,6 +200,9 @@ static void writeWordToPageBuffer(uint16_t data) {
   }
 }
 
+#define RPORT PORTB
+#define RDDR DDRB
+#define RPIN PINB
 #define RX PB3
 #define TX PB4
 #define BAUD 57600
@@ -180,10 +224,10 @@ static void DelayBaudHalf(void)
 static uint8_t GetByte(void)
 {
 
-  DDRB  &= ~_BV(RX);
+  RDDR  &= ~_BV(RX);
 
-  while (!(PINB&_BV(RX))); // Wait for hi
-  while ( (PINB&_BV(RX))); // Wait for start bit
+  while (!(RPIN&_BV(RX))); // Wait for hi
+  while ( (RPIN&_BV(RX))); // Wait for start bit
   
   DelayBaudHalf();
   
@@ -195,7 +239,7 @@ static uint8_t GetByte(void)
     DelayBaud();
     
     data>>=1;
-    if (PINB&_BV(RX)) data|=0x80;       
+    if (RPIN&_BV(RX)) data|=0x80;       
   } 
   
   return data;    
@@ -212,16 +256,16 @@ static uint8_t GetBlock(void)
       uint32_t ctr=800000;
 
       while (1) {
-        if (PINB&_BV(RX)) {
+        if (RPIN&_BV(RX)) {
           last=1;
         } else {
           if (last) 
             break;        
         }         
 
-        if (!ctr--) {
-            asm volatile ("rjmp __vectors - 2"); 
-        }
+        // if (!ctr--) {
+        //     asm volatile ("rjmp __vectors - 2"); 
+        // }
       }
 
       // b=GetByte();
@@ -238,7 +282,7 @@ static uint8_t GetBlock(void)
         DelayBaud();
         
         data>>=1;
-        if (PINB&_BV(RX)) data|=0x80;       
+        if (RPIN&_BV(RX)) data|=0x80;       
       }       
       buffer[i]=data;      
       sum+=data;     
@@ -251,20 +295,20 @@ static void SendByte(uint8_t data)
 {
   uint8_t i;
   
-   PORTB &=~_BV(TX);
+   RPORT &=~_BV(TX);
   DelayBaud();
   
   for (i=0; i<8; i++)
   {
     if (data&1)
-      PORTB |= _BV(TX);
+      RPORT |= _BV(TX);
     else
-      PORTB &=~_BV(TX);
+      RPORT &=~_BV(TX);
     data>>=1;
     DelayBaud();
   }
 
-    PORTB |= _BV(TX);
+    RPORT |= _BV(TX);
   DelayBaud();
 }
 
@@ -274,7 +318,13 @@ int main(void) {
   
   if (bootLoaderStartCondition()) {
   
-   DDRB  |= _BV(TX); 
+
+#if defined( __AVR_ATtiny104__) || defined( __AVR_ATtiny102__)
+  CCP=0xD8;   // configuration change protection, write signature
+  CLKPSR=0;   // set cpu clock prescaler =1 (8Mhz) (attiny 102/104)
+#endif
+
+   RDDR  |= _BV(TX); 
     
    currentAddress.w = 0;
 
