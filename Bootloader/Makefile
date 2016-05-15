@@ -37,6 +37,7 @@ CFLAGS += -nostartfiles -ffunction-sections -fdata-sections -fpack-struct -fno-i
 
 # LDFLAGS = $(LDPATH) -Wl,--relax,--section-start=bootloader=$(BOOTLOADER_ADDRESS),--gc-sections
 
+# LDFLAGS = $(LDPATH) -Wl,--relax,--section-start=.text=0x180,--gc-sections
 LDFLAGS = $(LDPATH) -Wl,--relax,--section-start=.text=$(BOOTLOADER_ADDRESS),--gc-sections
 
 #-B $(CURDIR)"\configuration\t104_default"
@@ -88,9 +89,9 @@ main.bin:	$(OBJECTS)
 	@$(CC) $(CFLAGS) -o main.bin $(OBJECTS) $(LDFLAGS)
 
 main.hex:	main.bin
-	@echo Building Micronucleus configuration: $(CONFIG)
+	@echo Building Gluon configuration: $(CONFIG)
 	@rm -f main.hex main.eep.hex
-	@avr-objcopy -j .text -j .data -O ihex main.bin main.hex
+	@avr-objcopy --change-section-lma .text=0x$(BOOTLOADER_ADDRESS) -j .text -j .data -O ihex main.bin main.hex
 	@echo Size of sections:
 	@avr-size main.bin	
 	@echo Size of binary hexfile. Use the "data" size to calculate the bootloader address:
