@@ -1,2 +1,2 @@
 # Gluon
-An extremely small serial bootloader for the AVR ATtiny
+A small serial bootloader for the AVR ATtiny - work in progress.
