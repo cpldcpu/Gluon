@@ -4,10 +4,6 @@
  * Licens7e: GNU GPL v2 (see License.txt)
  */
  
-#define MICRONUCLEUS_VERSION_MAJOR 2
-#define MICRONUCLEUS_VERSION_MINOR 3
-
-
 
 #include <avr/io.h>
 #include <avr/pgmspace.h>
@@ -19,8 +15,6 @@
 #endif
 
 #include "bootloaderconfig.h"
-//#include "bootloadasm.h"
-// #include "usbdrv/usbdrv.c"
 
 // verify the bootloader address aligns with page size
 #if (defined __AVR_ATtiny841__)||(defined __AVR_ATtiny441__)  
